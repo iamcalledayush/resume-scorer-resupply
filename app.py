@@ -535,9 +535,6 @@ def render_results(rows: List[Dict]):
 def main():
     st.set_page_config(page_title="Resume Ranker", page_icon="📄", layout="wide")
     _inject_custom_css()
-
-    if "cancel_requested" not in st.session_state:
-        st.session_state.cancel_requested = False
     
     st.sidebar.title("Resume Ranker")
     st.sidebar.markdown(
@@ -545,15 +542,6 @@ def main():
         "- Upload multiple PDF resumes\n"
         "- Get technical scores and a final competitive ranking"
     )
-
-    cancel_clicked = st.sidebar.button(
-        "🛑 CANCEL CURRENT RUN 🛑",
-        disabled=not st.session_state.is_running,
-    )
-    
-    if cancel_clicked:
-        st.session_state.cancel_requested = True
-        st.sidebar.warning("Cancel requested. Stopping after current step…")
     
     st.markdown(
         '<div class="app-header"><h1>Resume Ranker</h1>'
