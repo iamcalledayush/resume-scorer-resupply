@@ -42,7 +42,7 @@ def download_resumes_from_csv(
         page = context.new_page()
 
         print("Opening Breezy login page...")
-        page.goto("https://app.breezy.hr/signin", wait_until="networkidle")
+        page.goto("https://app.breezy.hr/signin", wait_until="domcontentloaded")
 
         # --- LOGIN ---
         page.wait_for_selector("input[name='email_address']", timeout=60000)
