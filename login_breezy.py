@@ -12,7 +12,7 @@ DEFAULT_OUTPUT_DIR = "resume_pdfs"
 def _robust_login(page, email: str, password: str, max_attempts: int = 3):
     # Single-attempt login (ignore max_attempts)
     print("Opening Breezy login page...")
-    page.goto("https://app.breezy.hr/signin", wait_until="networkidle")
+    page.goto("https://app.breezy.hr/signin", wait_until="domcontentloaded")
 
     # --- LOGIN ---
     page.wait_for_selector("input[name='email_address']", timeout=60000)
