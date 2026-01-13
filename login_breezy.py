@@ -21,7 +21,7 @@ def _robust_login(page, email: str, password: str, max_attempts: int = 3):
     # Wait for any likely login form/email input
     page.wait_for_selector(
         "form, input[type='email'], input[name='email'], input[name='email_address']",
-        timeout=100000
+        timeout=120000
     )
 
     # Fill email (try multiple possibilities)
@@ -41,12 +41,20 @@ def _robust_login(page, email: str, password: str, max_attempts: int = 3):
     # Click submit (try common options)
     if page.locator("button[type='submit']").count() > 0:
         page.click("button[type='submit']")
+        page.wait_for_timeout(2000)
+        print("[LOGIN] URL after submit:", page.url)
+        img_bytes = page.screenshot(full_page=True)
+        st.image(img_bytes, caption="Render login state after submit", use_column_width=True)
     else:
         page.click("input[type='submit']")
+        page.wait_for_timeout(2000)
+        print("[LOGIN] URL after submit:", page.url)
+        img_bytes = page.screenshot(full_page=True)
+        st.image(img_bytes, caption="Render login state after submit", use_column_width=True)
 
 
     # Wait until main Breezy dashboard loads
-    page.wait_for_url("**/app/**", timeout=100000)
+    page.wait_for_url("**/app/**", timeout=120000)
     print("Successfully logged in!")
 
 
