@@ -38,17 +38,45 @@ def download_resumes_from_csv(
             headless=headless,
             args=["--no-sandbox", "--disable-dev-shm-usage"],
         )
-        context = browser.new_context(accept_downloads=True)
+        context = browser.new_context(
+            accept_downloads=True,
+            viewport={"width": 1280, "height": 720},
+            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        )
         page = context.new_page()
 
         print("Opening Breezy login page...")
         page.goto("https://app.breezy.hr/signin", wait_until="domcontentloaded")
 
         # --- LOGIN ---
-        page.wait_for_selector("input[name='email_address']", timeout=60000)
-        page.fill("input[name='email_address']", email)
-        page.fill("input[name='password']", password)
-        page.click("input[type='submit']")
+        page.wait_for_load_state("domcontentloaded")
+        page.wait_for_timeout(1500)
+        
+        # Wait for any likely login form/email input
+        page.wait_for_selector(
+            "form, input[type='email'], input[name='email'], input[name='email_address']",
+            timeout=60000
+        )
+        
+        # Fill email (try multiple possibilities)
+        if page.locator("input[name='email_address']").count() > 0:
+            page.fill("input[name='email_address']", email)
+        elif page.locator("input[name='email']").count() > 0:
+            page.fill("input[name='email']", email)
+        else:
+            page.fill("input[type='email']", email)
+        
+        # Fill password (try common options)
+        if page.locator("input[name='password']").count() > 0:
+            page.fill("input[name='password']", password)
+        else:
+            page.fill("input[type='password']", password)
+        
+        # Click submit (try common options)
+        if page.locator("button[type='submit']").count() > 0:
+            page.click("button[type='submit']")
+        else:
+            page.click("input[type='submit']")
 
         # Wait until main Breezy dashboard loads
         page.wait_for_url("**/app/**", timeout=60000)
