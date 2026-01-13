@@ -536,6 +536,13 @@ def main():
     st.set_page_config(page_title="Resume Ranker", page_icon="📄", layout="wide")
     _inject_custom_css()
 
+    # ---- RUN LOCK (prevents multiple clicks triggering multiple runs) ----
+    if "is_running" not in st.session_state:
+        st.session_state.is_running = False
+
+    if "cancel_requested" not in st.session_state:
+        st.session_state.cancel_requested = False
+    
     st.sidebar.title("Resume Ranker")
     st.sidebar.markdown(
         "- Paste a job description\n"
@@ -543,6 +550,15 @@ def main():
         "- Get technical scores and a final competitive ranking"
     )
 
+    cancel_clicked = st.sidebar.button(
+        "🛑 CANCEL CURRENT RUN 🛑",
+        disabled=not st.session_state.is_running,
+    )
+    
+    if cancel_clicked:
+        st.session_state.cancel_requested = True
+        st.sidebar.warning("Cancel requested. Stopping after current step…")
+    
     st.markdown(
         '<div class="app-header"><h1>Resume Ranker</h1>'
         "<p>Upload candidate PDFs and a job description to generate LLM-powered, "
@@ -567,54 +583,73 @@ def main():
         )
         debug_raw = st.checkbox("Show raw LLM output (debug)", value=False)
 
-    if st.button("Rank resumes"):
-        if not api_key:
-            st.error("Missing OPENAI_API_KEY environment variable.")
-            return
-        if not jd:
-            st.error("Paste a job description to continue.")
-            return
-        if not csv_file:
-            st.error("Upload a candidates CSV file.")
-            return
+    run_clicked = st.button("Rank resumes", disabled=st.session_state.is_running)
 
-        # Save CSV to disk so login_breezy can use it
-        tmp_csv_path = os.path.join("resume_pdfs", "uploaded_candidates.csv")
-        os.makedirs(os.path.dirname(tmp_csv_path), exist_ok=True)
-        with open(tmp_csv_path, "wb") as f:
-            f.write(csv_file.getvalue())
-
-        # Clear old PDFs
-        pdf_dir = "resume_pdfs"
-        for fname in os.listdir(pdf_dir):
-            if fname.lower().endswith(".pdf"):
-                try:
-                    os.remove(os.path.join(pdf_dir, fname))
-                except OSError:
-                    pass
-
-        client = OpenAI(api_key=api_key)
-        with st.spinner("Downloading resumes from Breezy and scoring..."):
-            # Download all resumes using Playwright script
-            login_breezy.download_resumes_from_csv(tmp_csv_path, headless=True)
-
-            # Collect downloaded PDFs as in-memory uploads
-            uploads = []
+    if run_clicked:
+        # If a run is already in progress, do nothing
+        if st.session_state.is_running:
+            st.warning("Already running… please wait.")
+            st.stop()
+    
+        st.session_state.is_running = True
+        st.session_state.cancel_requested = False
+        try:
+            if not api_key:
+                st.error("Missing OPENAI_API_KEY environment variable.")
+                return
+            if not jd:
+                st.error("Paste a job description to continue.")
+                return
+            if not csv_file:
+                st.error("Upload a candidates CSV file.")
+                return
+    
+            # Save CSV to disk so login_breezy can use it
+            tmp_csv_path = os.path.join("resume_pdfs", "uploaded_candidates.csv")
+            os.makedirs(os.path.dirname(tmp_csv_path), exist_ok=True)
+            with open(tmp_csv_path, "wb") as f:
+                f.write(csv_file.getvalue())
+    
+            # Clear old PDFs
+            pdf_dir = "resume_pdfs"
+            os.makedirs(pdf_dir, exist_ok=True)
             for fname in os.listdir(pdf_dir):
-                if not fname.lower().endswith(".pdf"):
-                    continue
-                path = os.path.join(pdf_dir, fname)
-                try:
-                    with open(path, "rb") as f:
-                        data = f.read()
-                except OSError:
-                    continue
-                buffer = io.BytesIO(data)
-                buffer.name = fname
-                uploads.append(buffer)
+                if fname.lower().endswith(".pdf"):
+                    try:
+                        os.remove(os.path.join(pdf_dir, fname))
+                    except OSError:
+                        pass
+    
+            client = OpenAI(api_key=api_key)
+            with st.spinner("Downloading resumes from Breezy and scoring..."):
+                # Download all resumes using Playwright script
+                login_breezy.download_resumes_from_csv(tmp_csv_path, headless=True)
+                if st.session_state.cancel_requested:
+                    st.warning("Run cancelled. No scoring was performed.")
+                    return
+    
+                # Collect downloaded PDFs as in-memory uploads
+                uploads = []
+                for fname in os.listdir(pdf_dir):
+                    if not fname.lower().endswith(".pdf"):
+                        continue
+                    path = os.path.join(pdf_dir, fname)
+                    try:
+                        with open(path, "rb") as f:
+                            data = f.read()
+                    except OSError:
+                        continue
+                    buffer = io.BytesIO(data)
+                    buffer.name = fname
+                    uploads.append(buffer)
+    
+                ranked = rank_resumes(client, jd, uploads, debug_raw=debug_raw)
+    
+            render_results(ranked)
+    
+        finally:
+            st.session_state.is_running = False
 
-            ranked = rank_resumes(client, jd, uploads, debug_raw=debug_raw)
-        render_results(ranked)
 
 
 if __name__ == "__main__":
