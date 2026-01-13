@@ -25,7 +25,7 @@ def _robust_login(page, email: str, password: str, max_attempts: int = 3):
             # Wait for any login form/email field
             page.wait_for_selector(
                 "input[type='email'], input[name='email'], input[name='email_address']",
-                timeout=20000,
+                timeout=60000,
             )
 
             # -------- EMAIL --------
@@ -73,7 +73,7 @@ def _robust_login(page, email: str, password: str, max_attempts: int = 3):
                     return !!(err && err.innerText && err.innerText.trim().length > 0);
                 }
                 """,
-                timeout=20000,
+                timeout=60000,
             )
 
             if "signin" in page.url:
