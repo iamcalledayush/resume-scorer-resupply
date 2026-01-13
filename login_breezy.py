@@ -23,7 +23,7 @@ def _robust_login(page, email: str, password: str, max_attempts: int = 3):
             page.goto("https://app.breezy.hr/signin", wait_until="networkidle")
 
             # --- LOGIN ---
-            page.wait_for_selector("input[name='email_address']", timeout=15000)
+            page.wait_for_selector("input[name='email_address']", timeout=60000)
             page.fill("input[name='email_address']", email)
             page.fill("input[name='password']", password)
 
@@ -31,7 +31,7 @@ def _robust_login(page, email: str, password: str, max_attempts: int = 3):
             page.click("input[type='submit']")
 
             # IMPORTANT: use the same success condition that worked before
-            page.wait_for_url("**/app/**", timeout=15000)
+            page.wait_for_url("**/app/**", timeout=60000)
 
             print("[LOGIN] Success")
             return
