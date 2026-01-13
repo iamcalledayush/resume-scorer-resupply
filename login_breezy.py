@@ -79,7 +79,45 @@ def download_resumes_from_csv(
             page.click("input[type='submit']")
 
         # Wait until main Breezy dashboard loads
-        page.wait_for_url("**/app/**", timeout=60000)
+        # After submit, wait for either:
+        # 1) URL changes away from /signin OR
+        # 2) Some known post-login UI appears OR
+        # 3) A login error appears
+        page.wait_for_timeout(1500)
+        
+        # Wait for navigation OR DOM change
+        try:
+            page.wait_for_url("**breezy.hr/**", timeout=60000)
+        except Exception:
+            pass
+        
+        # If still on signin, check for error and fail fast
+        current_url = page.url
+        print("After login URL:", current_url)
+        
+        if "signin" in current_url:
+            # Try to detect common error patterns (toast / alert / inline)
+            err_text = ""
+            for sel in [
+                "[role='alert']",
+                ".Toastify__toast-body",
+                ".toast",
+                ".alert",
+                "text=Invalid",
+                "text=incorrect",
+                "text=Try again",
+            ]:
+                try:
+                    loc = page.locator(sel)
+                    if loc.count() > 0 and loc.first.is_visible():
+                        err_text = loc.first.inner_text(timeout=1000)
+                        break
+                except Exception:
+                    continue
+            raise RuntimeError(f"Login did not redirect off /signin. Possible login failure or bot-check. URL={current_url}. Error={err_text[:200]}")
+        else:
+            print("Login likely succeeded (left /signin).")
+
         print("Successfully logged in!")
 
         # --- DOWNLOAD RESUMES ---
