@@ -10,43 +10,20 @@ load_dotenv()
 DEFAULT_OUTPUT_DIR = "resume_pdfs"
 
 def _robust_login(page, email: str, password: str, max_attempts: int = 3):
-    """
-    Robust Breezy login with retries.
-    Uses the exact logic that previously worked, with retry wrapping.
-    """
+    # Single-attempt login (ignore max_attempts)
+    print("Opening Breezy login page...")
+    page.goto("https://app.breezy.hr/signin", wait_until="networkidle")
 
-    for attempt in range(1, max_attempts + 1):
-        try:
-            print(f"[LOGIN] Attempt {attempt}/{max_attempts}")
+    # --- LOGIN ---
+    page.wait_for_selector("input[name='email_address']", timeout=60000)
+    page.fill("input[name='email_address']", email)
+    page.fill("input[name='password']", password)
+    page.click("input[type='submit']")
 
-            print("Opening Breezy login page...")
-            page.goto("https://app.breezy.hr/signin", wait_until="networkidle")
+    # Wait until main Breezy dashboard loads
+    page.wait_for_url("**/app/**", timeout=60000)
+    print("Successfully logged in!")
 
-            # --- LOGIN ---
-            page.wait_for_selector("input[name='email_address']", timeout=60000)
-            page.fill("input[name='email_address']", email)
-            page.fill("input[name='password']", password)
-
-            # IMPORTANT: use the same submit selector that worked before
-            page.click("input[type='submit']")
-
-            # IMPORTANT: use the same success condition that worked before
-            page.wait_for_url("**/app/**", timeout=60000)
-
-            print("[LOGIN] Success")
-            return
-
-        except Exception as e:
-            print(f"[LOGIN] Attempt {attempt} failed: {e} | url={page.url}")
-
-            if attempt == max_attempts:
-                raise RuntimeError(
-                    "Breezy login failed after multiple attempts "
-                    "(likely bot protection, bad creds, or 2FA)"
-                )
-
-            # brief pause before retry
-            page.wait_for_timeout(1500)
 
 
 
@@ -82,7 +59,7 @@ def download_resumes_from_csv(
         page = context.new_page()
 
         # --- LOGIN (robust + retries) ---
-        _robust_login(page, email, password, max_attempts=3)
+        _robust_login(page, email, password)
 
         # --- DOWNLOAD RESUMES ---
         with open(csv_path, newline="") as f:
