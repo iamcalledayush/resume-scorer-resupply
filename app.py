@@ -594,27 +594,44 @@ def main():
                     pass
 
         client = OpenAI(api_key=api_key)
-        with st.spinner("Downloading resumes from Breezy and scoring..."):
-            # Download all resumes using Playwright script
+        # --- LOGIN + DOWNLOAD ---
+        st.markdown("### Starting login")
+        with st.spinner("Logging into Breezy..."):
             login_breezy.download_resumes_from_csv(tmp_csv_path, headless=True)
 
-            # Collect downloaded PDFs as in-memory uploads
-            uploads = []
-            for fname in os.listdir(pdf_dir):
-                if not fname.lower().endswith(".pdf"):
-                    continue
-                path = os.path.join(pdf_dir, fname)
-                try:
-                    with open(path, "rb") as f:
-                        data = f.read()
-                except OSError:
-                    continue
-                buffer = io.BytesIO(data)
-                buffer.name = fname
-                uploads.append(buffer)
+        st.success("Login successful")
 
+        # --- DOWNLOAD COMPLETE ---
+        st.markdown("### Downloading resumes")
+        with st.spinner("Downloading resumes from Breezy..."):
+            pass  # already done inside login_breezy
+
+        st.success("Download successful")
+
+        # --- PREPARE FILES ---
+        uploads = []
+        for fname in os.listdir(pdf_dir):
+            if not fname.lower().endswith(".pdf"):
+                continue
+            path = os.path.join(pdf_dir, fname)
+            try:
+                with open(path, "rb") as f:
+                    data = f.read()
+            except OSError:
+                continue
+            buffer = io.BytesIO(data)
+            buffer.name = fname
+            uploads.append(buffer)
+
+        # --- RANKING ---
+        st.markdown("### Ranking resumes")
+        with st.spinner("Ranking resumes..."):
             ranked = rank_resumes(client, jd, uploads, debug_raw=debug_raw)
+
+        st.success("Ranking successful")
+
         render_results(ranked)
+
 
 
 
