@@ -11,7 +11,7 @@ DEFAULT_OUTPUT_DIR = "resume_pdfs"
 
 
 def download_resumes_from_csv(
-    csv_path: str, output_dir: str = DEFAULT_OUTPUT_DIR, headless: bool = False
+    csv_path: str, output_dir: str = DEFAULT_OUTPUT_DIR, headless: bool = True
 ) -> None:
     """
     Log in to Breezy via Playwright and download all resume URLs in the CSV.
