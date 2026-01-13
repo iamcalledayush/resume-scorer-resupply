@@ -596,7 +596,7 @@ def main():
         client = OpenAI(api_key=api_key)
         with st.spinner("Downloading resumes from Breezy and scoring..."):
             # Download all resumes using Playwright script
-            login_breezy.download_resumes_from_csv(tmp_csv_path, headless=False)
+            login_breezy.download_resumes_from_csv(tmp_csv_path, headless=True)
 
             # Collect downloaded PDFs as in-memory uploads
             uploads = []
