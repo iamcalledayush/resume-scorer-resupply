@@ -96,7 +96,7 @@ def _robust_login(page, email: str, password: str, max_attempts: int = 3):
 
 
 def download_resumes_from_csv(
-    csv_path: str, output_dir: str = DEFAULT_OUTPUT_DIR, headless: bool = True, should_cancel=None
+    csv_path: str, output_dir: str = DEFAULT_OUTPUT_DIR, headless: bool = True
 ) -> None:
     """
     Log in to Breezy via Playwright and download all resume URLs in the CSV.
@@ -118,51 +118,44 @@ def download_resumes_from_csv(
 
     os.makedirs(output_dir, exist_ok=True)
     
-    def _cancel_now() -> bool:
-        try:
-            return bool(should_cancel and should_cancel())
-        except Exception:
-            return False
-
-    if _cancel_now():
-        print("[CANCEL] Cancel requested before starting Playwright.")
-        return
-    
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=headless,
             args=["--no-sandbox", "--disable-dev-shm-usage"],
         )
-        try:
-            context = browser.new_context(accept_downloads=True)
-            page = context.new_page()
-    
-            # (your login call here)
-            # _robust_login(page, email, password, max_attempts=3)
-    
-            if _cancel_now():
-                print("[CANCEL] Cancel requested right after login.")
-                return
-    
-            # --- DOWNLOAD RESUMES ---
-            with open(csv_path, newline="") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    if _cancel_now():
-                        print("[CANCEL] Cancel requested during downloads. Stopping.")
-                        return
-    
-                    # ... existing per-row logic ...
-    
-                    # OPTIONAL: check again after each download
-                    if _cancel_now():
-                        print("[CANCEL] Cancel requested after a download. Stopping.")
-                        return
-        finally:
-            try:
-                browser.close()
-            except Exception:
-                pass
+        context = browser.new_context(accept_downloads=True)
+        page = context.new_page()
+
+        # --- LOGIN (robust + retries) ---
+        _robust_login(page, email, password, max_attempts=3)
+
+        # --- DOWNLOAD RESUMES ---
+        with open(csv_path, newline="") as f:
+            reader = csv.DictReader(f)
+
+            for row in reader:
+                name = (row.get("name") or "").strip() or "candidate"
+                url = (row.get("resume") or "").strip()
+
+                if not url.startswith("http"):
+                    print(f"Skipping invalid resume URL for {name}: {url}")
+                    continue
+
+                print(f"Downloading resume for {name}...")
+
+                with page.expect_download() as download_info:
+                    page.evaluate(f"window.location.href = '{url}'")
+
+                download = download_info.value
+                safe_name = name.replace(" ", "_")
+                filename = f"{safe_name}.pdf"
+                filepath = os.path.join(output_dir, filename)
+                download.save_as(filepath)
+                print(f"Saved: {filename}")
+                time.sleep(1)
+
+        browser.close()
+        
 
 
 
