@@ -623,7 +623,7 @@ def main():
             client = OpenAI(api_key=api_key)
             with st.spinner("Downloading resumes from Breezy and scoring..."):
                 # Download all resumes using Playwright script
-                login_breezy.download_resumes_from_csv(tmp_csv_path, headless=True)
+                login_breezy.download_resumes_from_csv(tmp_csv_path, headless=True, should_cancel=lambda: st.session_state.cancel_requested)
                 if st.session_state.cancel_requested:
                     st.warning("Run cancelled. No scoring was performed.")
                     return
