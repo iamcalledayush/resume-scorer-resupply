@@ -54,6 +54,64 @@ def _robust_login(page, email: str, password: str, max_attempts: int = 3):
     print("Successfully logged in!")
 
 
+def login_to_breezy(headless: bool = True):
+    """
+    Launch Playwright, log into Breezy, and return (p, browser, context, page).
+    Caller is responsible for closing browser/context and stopping playwright.
+    """
+    BREEZY_EMAIL = os.getenv("BREEZY_EMAIL", "")
+    BREEZY_PASSWORD = os.getenv("BREEZY_PASSWORD", "")
+    if not BREEZY_EMAIL or not BREEZY_PASSWORD:
+        raise RuntimeError("BREEZY_EMAIL and BREEZY_PASSWORD must be set in the environment.")
+
+    p = sync_playwright().start()
+    browser = p.chromium.launch(
+        headless=headless,
+        args=["--no-sandbox", "--disable-dev-shm-usage"],
+    )
+    context = browser.new_context(
+        accept_downloads=True,
+        viewport={"width": 1280, "height": 720},
+        user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    )
+    page = context.new_page()
+
+    _robust_login(page, BREEZY_EMAIL, BREEZY_PASSWORD)
+    return p, browser, context, page
+
+def download_resumes_from_csv_with_page(
+    page,
+    csv_path: str,
+    output_dir: str = DEFAULT_OUTPUT_DIR,
+) -> None:
+    """
+    Download resumes using an already-authenticated Breezy page.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    with open(csv_path, newline="") as f:
+        reader = csv.DictReader(f)
+
+        for row in reader:
+            name = (row.get("name") or "").strip() or "candidate"
+            url = (row.get("resume") or "").strip()
+
+            if not url.startswith("http"):
+                print(f"Skipping invalid resume URL for {name}: {url}")
+                continue
+
+            print(f"Downloading resume for {name}...")
+
+            with page.expect_download() as download_info:
+                page.evaluate(f"window.location.href = '{url}'")
+
+            download = download_info.value
+            safe_name = name.replace(" ", "_")
+            filename = f"{safe_name}.pdf"
+            filepath = os.path.join(output_dir, filename)
+            download.save_as(filepath)
+            print(f"Saved: {filename}")
+            time.sleep(1)
 
 
 def download_resumes_from_csv(
