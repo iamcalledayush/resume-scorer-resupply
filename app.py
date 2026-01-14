@@ -17,29 +17,43 @@ def _inject_custom_css() -> None:
     st.markdown(
         """
         <style>
-        /* Base layout */
+        /* Use Streamlit theme variables so it works in light AND dark mode */
+        :root {
+            --bg: var(--st-color-background);
+            --bg2: var(--st-color-secondary-background);
+            --text: var(--st-color-text);
+            --muted: color-mix(in srgb, var(--text) 65%, transparent);
+            --border: color-mix(in srgb, var(--text) 15%, transparent);
+        }
+
         .main {
-            background: radial-gradient(circle at top, #020617 0, #020617 40%, #020617 100%);
-            color: #e5e7eb;
+            background: var(--bg) !important;
+            color: var(--text) !important;
         }
+
         section[data-testid="stSidebar"] {
-            background-color: #020617;
-            border-right: 1px solid #1f2937;
+            background: var(--bg2) !important;
+            border-right: 1px solid var(--border) !important;
         }
-        section[data-testid="stSidebar"] h1, 
-        section[data-testid="stSidebar"] h2, 
-        section[data-testid="stSidebar"] h3 {
-            color: #f9fafb;
+
+        section[data-testid="stSidebar"] h1,
+        section[data-testid="stSidebar"] h2,
+        section[data-testid="stSidebar"] h3,
+        section[data-testid="stSidebar"] p,
+        section[data-testid="stSidebar"] span,
+        section[data-testid="stSidebar"] div {
+            color: var(--text) !important;
         }
 
         /* Title + description */
         .app-header h1 {
             font-size: 2.1rem;
             margin-bottom: 0.2rem;
+            color: var(--text) !important;
         }
         .app-header p {
             margin-top: 0;
-            color: #9ca3af;
+            color: var(--muted) !important;
             font-size: 0.95rem;
         }
 
@@ -47,40 +61,43 @@ def _inject_custom_css() -> None:
         .candidate-card {
             padding: 1.1rem 1.3rem;
             border-radius: 0.9rem;
-            background: #020617;
-            border: 1px solid #1f2937;
-            box-shadow: 0 18px 35px rgba(15,23,42,0.75);
+            background: var(--bg2) !important;
+            border: 1px solid var(--border) !important;
+            box-shadow: 0 18px 35px rgba(0,0,0,0.08);
             margin-bottom: 1rem;
+            color: var(--text) !important;
         }
         .candidate-card h3 {
             margin-top: 0;
             margin-bottom: 0.25rem;
             font-size: 1.02rem;
+            color: var(--text) !important;
         }
         .candidate-card ul {
             margin: 0.35rem 0 0 1.1rem;
             padding: 0;
             font-size: 0.9rem;
+            color: var(--text) !important;
         }
-        .candidate-card li {
-            margin-bottom: 0.12rem;
-        }
+
         .score-badge {
             display: inline-block;
             padding: 0.15rem 0.55rem;
             border-radius: 999px;
             font-size: 0.8rem;
-            background: #111827;
-            border: 1px solid #4b5563;
+            background: var(--bg) !important;
+            border: 1px solid var(--border) !important;
+            color: var(--text) !important;
             margin-left: 0.4rem;
         }
+
         .rank-pill {
             display: inline-block;
             padding: 0.15rem 0.6rem;
             border-radius: 999px;
             font-size: 0.8rem;
-            background: #1d4ed8;
-            color: #e5e7eb;
+            background: color-mix(in srgb, #2563eb 80%, var(--bg)) !important;
+            color: white !important;
             margin-right: 0.4rem;
         }
         </style>
