@@ -597,16 +597,24 @@ def main():
         # --- LOGIN + DOWNLOAD ---
         st.markdown("### Starting login")
         with st.spinner("Logging into Breezy..."):
-            login_breezy.download_resumes_from_csv(tmp_csv_path, headless=True)
-
+            p, browser, context, page = login_breezy.login_to_breezy(headless=True)
         st.success("Login successful")
-
-        # --- DOWNLOAD COMPLETE ---
+        
         st.markdown("### Downloading resumes")
         with st.spinner("Downloading resumes from Breezy..."):
-            pass  # already done inside login_breezy
-
+            login_breezy.download_resumes_from_csv_with_page(
+                page,
+                tmp_csv_path,
+                output_dir=pdf_dir,
+            )
         st.success("Download successful")
+        
+        # Always close Playwright resources
+        try:
+            context.close()
+            browser.close()
+        finally:
+            p.stop()
 
         # --- PREPARE FILES ---
         uploads = []
