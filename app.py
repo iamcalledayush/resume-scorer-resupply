@@ -153,8 +153,12 @@ Scoring rubric (0–100):
 - 91–100: Exceptional match; deep experience with almost all core requirements and very relevant projects. Reserve scores above 95 for truly outstanding fits.
 
 Must-have handling:
-- If at least ONE clearly required must-have requirement from the JD is missing: cap score at 60.
-- If SEVERAL clearly required must-haves are missing: cap score at 40.
+- Identify the JD’s must-haves.
+- Treat a must-have as SATISFIED if the resume shows the skill explicitly OR shows clearly equivalent evidence (synonyms/near-equivalents).
+  Example: “Figma” counts for “Figma developer” if the resume indicates real usage/ownership (design systems, prototypes, UI/UX design work) — do not require the exact word “developer”.
+- Do NOT invent skills. If the resume only lists a keyword with no context, treat it as weak evidence (partial), not missing.
+- If at least ONE clearly required must-have is truly missing (no evidence at all, direct or equivalent): cap score at 60.
+- If SEVERAL clearly required must-haves are truly missing: cap score at 40.
 - If NONE of the JD’s core requirements appear in the resume: cap score at 20.
 
 Output JSON schema:
