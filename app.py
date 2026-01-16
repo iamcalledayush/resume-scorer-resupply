@@ -105,6 +105,28 @@ def _inject_custom_css() -> None:
         unsafe_allow_html=True,
     )
 
+def build_location_gate_prompt() -> str:
+    return """
+You are extracting a candidate's current (or most recent) US state from a resume PDF.
+
+Task:
+Decide if the candidate should be INCLUDED based on whether their current/most recent US state is one of:
+CT, ME, MA, NH, RI, VT, NY.
+
+Rules:
+- Prefer the location in the header/contact area near the top of the resume.
+- If not present, use the location from the most recent entry between:
+  work experience and education (whichever has the latest date).
+- Do NOT guess. If unclear or non-US, set allow=false.
+
+Output:
+Return STRICT JSON only:
+{
+  "allow": boolean,
+  "reason": string
+}
+""".strip()
+
 
 def build_prompt(job_description: str, resume_filename: str) -> str:
     """Build the per-resume evaluation prompt sent to the LLM."""
@@ -292,6 +314,78 @@ Schema:
     repaired = _parse_json_safe(repaired_text, fallback_name)
     return repaired
 
+def location_gate(
+    client: OpenAI, file_id: str, debug_raw: bool = False, resume_filename: str = ""
+) -> Dict:
+    prompt = build_location_gate_prompt()
+
+    resp = client.responses.create(
+        model="gpt-4o-mini",
+        input=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": prompt},
+                    {"type": "input_file", "file_id": file_id},
+                ],
+            }
+        ],
+        # response_format={"type": "json_object"},
+    )
+
+    raw = _extract_text_from_response(resp)
+    data = _parse_json_generic(raw)
+
+    allow = bool(data.get("allow", False))
+    reason = (data.get("reason") or "").strip() or "No reason provided."
+
+    if debug_raw:
+        st.markdown(f"**Debug: location gate output for `{resume_filename}`**")
+        st.code(raw or "<empty>")
+
+    return {"allow": allow, "reason": reason}
+
+def evaluate_resume_with_file_id(
+    client: OpenAI, job_description: str, file_id: str, resume_filename: str, debug_raw: bool = False
+) -> Dict:
+    prompt = build_prompt(job_description, resume_filename)
+
+    response = client.responses.create(
+        model="gpt-4o",
+        input=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": prompt},
+                    {"type": "input_file", "file_id": file_id},
+                ],
+            }
+        ],
+        # response_format={"type": "json_object"},
+    )
+
+    content = _extract_text_from_response(response)
+    parsed = _parse_json_safe(content, resume_filename)
+
+    is_default = (
+        parsed.get("score", 0) == 0
+        and parsed.get("one_line_reason") == "No one-line reason returned."
+    )
+    repaired = {}
+    if is_default and content.strip():
+        repaired = _repair_json_with_llm(client, content, resume_filename)
+        if repaired.get("score", 0) != 0 or repaired.get("one_line_reason") != "No one-line reason returned.":
+            parsed = repaired
+
+    if debug_raw or is_default:
+        st.markdown(f"**Debug: raw LLM output for `{resume_filename}`**")
+        st.code(content or "<empty content>")
+        if repaired:
+            st.markdown("**Debug: repaired JSON candidate**")
+            st.code(json.dumps(repaired, indent=2))
+
+    return parsed
+
 
 def evaluate_resume(
     client: OpenAI, job_description: str, upload, debug_raw: bool = False
@@ -477,21 +571,57 @@ def _rerank_candidates(
 def rank_resumes(
     client: OpenAI, job_description: str, uploads, debug_raw: bool = False
 ):
-    """
-    Process all uploaded PDFs with two-pass ranking.
-
-    We:
-    - Score every resume independently (Stage 1).
-    - Globally re-rank only the strongest candidates, capped at 100 (Stage 2).
-    """
     evaluated: List[Dict] = []
+    skipped: List[Dict] = []
+
     for idx, upload in enumerate(uploads, start=1):
-        result = evaluate_resume(client, job_description, upload, debug_raw=debug_raw)
+        file_bytes = upload.getvalue()
+        buffer = io.BytesIO(file_bytes)
+        buffer.name = upload.name
+
+        # Upload ONCE, reuse file_id for gate + scoring
+        uploaded_file = client.files.create(file=buffer, purpose="assistants")
+        file_id = uploaded_file.id
+
+        # ---- STAGE 0: location gate ----
+        gate = location_gate(
+            client,
+            file_id=file_id,
+            debug_raw=debug_raw,
+            resume_filename=upload.name,
+        )
+
+        if not gate.get("allow", False):
+            skipped.append(
+                {
+                    "filename": upload.name,
+                    "gate_reason": gate.get("reason", "Rejected by location gate."),
+                }
+            )
+            continue
+
+        # ---- STAGE 1: score only allowed resumes ----
+        result = evaluate_resume_with_file_id(
+            client,
+            job_description=job_description,
+            file_id=file_id,
+            resume_filename=upload.name,
+            debug_raw=debug_raw,
+        )
         result["id"] = str(idx)
         evaluated.append(result)
 
-    # If there are more than 100 candidates, keep only the top 100 by
-    # initial technical score for the comparative re-ranking step.
+    # UI note: show how many were filtered out
+    if skipped:
+        st.info(f"Location filter: kept {len(evaluated)} resumes, rejected {len(skipped)} resumes.")
+        with st.expander("See rejected resumes (location filter)"):
+            for s in skipped:
+                st.write(f"- {s['filename']}: {s['gate_reason']}")
+
+    if not evaluated:
+        return []
+
+    # ---- Stage 2: rerank as before (top 100 only) ----
     if len(evaluated) > 100:
         evaluated.sort(key=lambda r: r.get("score", 0), reverse=True)
         top_evaluated = evaluated[:100]
@@ -502,6 +632,7 @@ def rank_resumes(
         client, job_description, top_evaluated, debug_raw=debug_raw
     )
     return ranked
+
 
 
 def render_results(rows: List[Dict]):
