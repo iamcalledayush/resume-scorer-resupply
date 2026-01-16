@@ -96,6 +96,7 @@ def _inject_custom_css() -> None:
             padding: 0.15rem 0.6rem;
             border-radius: 999px;
             font-size: 0.8rem;
+            background: #2563eb; /* fallback */
             background: color-mix(in srgb, #2563eb 80%, var(--bg)) !important;
             color: white !important;
             margin-right: 0.4rem;
@@ -110,7 +111,7 @@ def build_location_gate_prompt() -> str:
 You are extracting a candidate's current (or most recent) US state from a resume PDF.
 
 Task:
-Decide if the candidate should be INCLUDED based on whether their current/most recent US state is one of:
+Decide if the candidate should be INCLUDED based on whether their current/most recent US state (normalized to a 2-letter abbreviation) is one of:
 CT, ME, MA, NH, RI, VT, NY.
 
 Rules:
@@ -123,7 +124,7 @@ Output:
 Return STRICT JSON only:
 {
   "allow": boolean,
-  "reason": string
+  "reason": string (brief explanation, e.g. "Boston, MA" or "Most recent role located in NY" or "No location found")
 }
 """.strip()
 
@@ -131,20 +132,20 @@ Return STRICT JSON only:
 def build_prompt(job_description: str, resume_filename: str) -> str:
     """Build the per-resume evaluation prompt sent to the LLM."""
     return f"""
-You are an expert tech recruiter.
+You are an expert recruiter and hiring manager.
 
 Task:
-Given a job description and ONE candidate's resume (attached as a PDF), evaluate how well this candidate fits the role purely from a technical perspective.
+Given a job description and ONE candidate's resume (attached as a PDF), evaluate how well this candidate fits the role purely from a job-requirements perspective.
 
 Focus rules:
-- Focus ONLY on technical skills, work experience, and concrete project experience.
-- Ignore non-technical parts of the JD (benefits, company description, perks, HR boilerplate, etc.).
-- Use your knowledge to detect implicit/related skills (e.g., strong Postgres/MySQL → SQL; PySpark/Spark → data engineering; Pandas/NumPy → Python analytics).
-- Do NOT guess skills that are not clearly implied by the resume.
- - You already have access to the full text of the attached PDF. NEVER say you cannot parse the PDF. NEVER ask the user to resend the resume text.
+- Focus ONLY on role-relevant qualifications: required skills, relevant experience, certifications/licenses (if applicable), domain knowledge, and concrete accomplishments.
+- Ignore JD fluff (benefits, company description, perks, HR boilerplate, etc.).
+- Use reasonable inference for closely related skills when clearly implied by the resume (do not invent credentials).
+- Do NOT guess qualifications that are not clearly implied by the resume.
+- You already have access to the full text of the attached PDF. NEVER say you cannot parse the PDF. NEVER ask the user to resend the resume text.
 
 Scoring rubric (0–100):
-- 0–20: Almost no overlap with JD tech stack.
+- 0–20: Almost no overlap with the JD’s core requirements.
 - 21–40: Some overlap but many core requirements missing.
 - 41–60: Partial match; several important must-haves missing or shallow.
 - 61–80: Solid match; most core requirements present with reasonable depth.
@@ -152,9 +153,9 @@ Scoring rubric (0–100):
 - 91–100: Exceptional match; deep experience with almost all core requirements and very relevant projects. Reserve scores above 95 for truly outstanding fits.
 
 Must-have handling:
-- If at least ONE clearly required core skill from the JD is missing → cap score at 60.
-- If SEVERAL clearly required core skills are missing → cap score at 40.
-- If NONE of the core tech stack appears in the resume → cap score at 20.
+- If at least ONE clearly required must-have requirement from the JD is missing: cap score at 60.
+- If SEVERAL clearly required must-haves are missing: cap score at 40.
+- If NONE of the JD’s core requirements appear in the resume: cap score at 20.
 
 Output JSON schema:
 Return STRICT JSON only (no extra text, no code fences, no commentary). Even if the resume is very short or partially unreadable, you MUST still return valid JSON using this schema and set an appropriate low score with clear gaps.
@@ -163,12 +164,12 @@ Keys:
 - "candidate_name": string, from the resume if possible; otherwise use a clean version of the filename (no extension).
 - "score": integer 0–100 following the rubric above.
 - "one_line_reason": one short sentence: why this score vs this JD.
-- "seniority": short phrase, e.g. "Senior backend engineer (7y)".
+- "seniority": short phrase, e.g. "Senior (7y)" or "Mid-level (3y)".
 - "recency": short phrase about recency of relevant work, e.g. "Most relevant work 2022–2024".
-- "top_tech": short list of key technologies (array of strings).
+- "top_skills": short list of the most relevant skills/qualifications for this role (array of strings).
 - "key_projects": 1–3 short project phrases (array of strings).
 - "key_gaps": list of important missing things vs the JD (array of strings).
-- "match_summary": one short sentence summarizing overall technical fit.
+- "match_summary": one short sentence summarizing overall fit for this role.
 
 Job Description:
 \"\"\"{job_description}\"\"\"
@@ -233,7 +234,7 @@ def _parse_json_safe(raw_text: str, fallback_name: str) -> Dict:
     data.setdefault("one_line_reason", "No one-line reason returned.")
     data.setdefault("seniority", "")
     data.setdefault("recency", "")
-    data.setdefault("top_tech", [])
+    data.setdefault("top_skills", [])
     data.setdefault("key_projects", [])
     data.setdefault("key_gaps", [])
     data.setdefault("match_summary", "")
@@ -282,7 +283,7 @@ Return STRICT JSON only (no extra text, no code fences, no commentary) with keys
 - "one_line_reason": short sentence
 - "seniority": short phrase
 - "recency": short phrase
-- "top_tech": array of strings
+- "top_skills": array of strings
 - "key_projects": array of strings
 - "key_gaps": array of strings
 - "match_summary": short sentence
@@ -449,21 +450,21 @@ def _build_candidate_summary(candidate_id: str, data: Dict) -> str:
     one_line = data.get("one_line_reason", "") or data.get("match_summary", "")
     seniority = data.get("seniority", "")
     recency = data.get("recency", "")
-    top_tech = ", ".join(data.get("top_tech", []))
+    top_skills = ", ".join(data.get("top_skills", []))
     key_projects = "; ".join(data.get("key_projects", []))
     key_gaps = "; ".join(data.get("key_gaps", []))
 
     return (
         f"id={candidate_id} | name={name} | score={score} | "
         f"reason={one_line} | seniority={seniority} | recency={recency} | "
-        f"top_tech={top_tech} | key_projects={key_projects} | key_gaps={key_gaps}"
+        f"top_skills={top_skills} | key_projects={key_projects} | key_gaps={key_gaps}"
     )
 
 
 def _build_rerank_prompt(job_description: str, summaries_text: str) -> str:
     """Build the prompt used for pass 2: relative re-ranking from summaries."""
     return f"""
-You are an expert technical recruiter.
+You are an expert recruiter and hiring manager.
 
 Task:
 Given a job description and a list of candidate summaries, produce a FINAL ranking of candidates for this single role.
@@ -471,10 +472,10 @@ Given a job description and a list of candidate summaries, produce a FINAL ranki
 Each candidate summary line has:
 - an id,
 - candidate name,
-- the initial technical score (0–100) from a previous evaluation,
+- the initial fit score (0–100) from a previous evaluation,
 - a short reason for that score,
 - seniority and recency hints,
-- key technologies,
+- key skills or qualifications,
 - key projects,
 - key gaps vs. the job description.
 
@@ -482,8 +483,8 @@ Instructions:
 - Treat candidates as COMPETING for ONE open role.
 - Compare candidates AGAINST EACH OTHER, not in isolation.
 - Use the initial score as a signal, but you may adjust it for relative comparison.
-- Prefer candidates whose skills and experience best match the job’s core technical requirements and seniority level.
-- Consider coverage of must-have skills, depth and recency of experience, and alignment with the problem space.
+- Prefer candidates whose skills, qualifications, and experience best match the job’s core requirements and seniority level.
+- Consider coverage of must-have requirements, depth and recency of experience, and relevance to the role’s responsibilities.
 - If multiple candidates are very similar, you may keep scores close and differentiate ranks by small adjustments.
  - You ONLY see these summaries, not the original PDFs. NEVER ask for PDFs or additional resume text. If a summary contains almost no information, still return an entry with final_score=0 and a clear rerank_reason like "Summary contained insufficient information to evaluate.".
 
@@ -544,7 +545,7 @@ def _rerank_candidates(
         for rank, row in enumerate(fallback_sorted, start=1):
             row["final_score"] = row.get("score", 0)
             row["final_rank"] = rank
-            row["rerank_reason"] = "Ranked by initial technical score only."
+            row["rerank_reason"] = "Ranked by initial role-fit score only."
         return fallback_sorted
 
     # Map id -> initial candidate data
@@ -650,11 +651,11 @@ def render_results(rows: List[Dict]):
         rerank_reason = row.get("rerank_reason", "")
         seniority = row.get("seniority", "")
         recency = row.get("recency", "")
-        top_tech = row.get("top_tech", [])
+        top_skills = row.get("top_skills", [])
         key_projects = row.get("key_projects", [])
         key_gaps = row.get("key_gaps", [])
 
-        tech_str = ", ".join(top_tech) if top_tech else "—"
+        skills_str = ", ".join(top_skills) if top_skills else "—"
         project_str = "; ".join(p for p in key_projects if p) if key_projects else "—"
         gaps_str = "; ".join(g for g in key_gaps if g) if key_gaps else "—"
 
@@ -671,7 +672,7 @@ def render_results(rows: List[Dict]):
             <li><b>Re-ranking reason:</b> {rerank_reason or "—"}</li>
             <li><b>Seniority:</b> {seniority or "—"}</li>
             <li><b>Recency of relevant work:</b> {recency or "—"}</li>
-            <li><b>Top tech:</b> {tech_str}</li>
+            <li><b>Top skills:</b> {skills_str}</li>
             <li><b>Key projects:</b> {project_str}</li>
             <li><b>Key gaps vs JD:</b> {gaps_str}</li>
           </ul>
@@ -773,7 +774,7 @@ def build_rankings_pdf_bytes_like_streamlit(job_description: str, rows: List[Dic
         rerank_reason = row.get("rerank_reason", "") or "—"
         seniority = row.get("seniority", "") or "—"
         recency = row.get("recency", "") or "—"
-        top_tech = ", ".join(row.get("top_tech", []) or []) or "—"
+        top_skills = ", ".join(row.get("top_skills", []) or []) or "—"
         key_projects = "; ".join([p for p in (row.get("key_projects", []) or []) if p]) or "—"
         key_gaps = "; ".join([g for g in (row.get("key_gaps", []) or []) if g]) or "—"
 
@@ -797,7 +798,7 @@ def build_rankings_pdf_bytes_like_streamlit(job_description: str, rows: List[Dic
             <li><b>Re-ranking reason:</b> {esc(rerank_reason)}</li>
             <li><b>Seniority:</b> {esc(seniority)}</li>
             <li><b>Recency:</b> {esc(recency)}</li>
-            <li><b>Top tech:</b> {esc(top_tech)}</li>
+            <li><b>Top skills:</b> {esc(top_skills)}</li>
             <li><b>Key projects:</b> {esc(key_projects)}</li>
             <li><b>Key gaps:</b> {esc(key_gaps)}</li>
           </ul>
@@ -847,13 +848,13 @@ def main():
     st.sidebar.markdown(
         "- Paste a job description\n"
         "- Upload multiple PDF resumes\n"
-        "- Get technical scores and a final competitive ranking"
+        "- Get resume scores and a final competitive ranking"
     )
     
     st.markdown(
         '<div class="app-header"><h1>Resume Ranker</h1>'
         "<p>Upload candidate PDFs and a job description to generate LLM-powered, "
-        "technical-fit scores and a competitive ranking across all resumes.</p></div>",
+        "role-fit scores and a competitive ranking across all resumes.</p></div>",
         unsafe_allow_html=True,
     )
 
@@ -944,8 +945,6 @@ def main():
             ranked = rank_resumes(client, jd, uploads, debug_raw=debug_raw)
 
         st.success("Ranking successful")
-
-        render_results(ranked)
         pdf_bytes = build_rankings_pdf_bytes_like_streamlit(jd, ranked)
         st.download_button(
             label="Download rankings as PDF",
@@ -953,6 +952,8 @@ def main():
             file_name="resume_rankings.pdf",
             mime="application/pdf",
         )
+        st.markdown("---")
+        render_results(ranked)
 
 
 
