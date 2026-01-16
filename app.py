@@ -680,6 +680,165 @@ def render_results(rows: List[Dict]):
         st.markdown(html, unsafe_allow_html=True)
 
 
+# To download rankings in a pdf
+def build_rankings_pdf_bytes_like_streamlit(job_description: str, rows: List[Dict]) -> bytes:
+    """
+    Build a PDF by rendering Streamlit-like HTML cards using Playwright's PDF printer.
+    """
+    jd_safe = (job_description or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    jd_safe = jd_safe.replace("\n", "<br/>")
+
+    # Reuse the same card styling concept (tweaked for white PDF background)
+    css = """
+    <style>
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+        margin: 32px;
+        color: #111827;
+        background: #ffffff;
+      }
+      h1 {
+        font-size: 22px;
+        margin: 0 0 12px 0;
+      }
+      h2 {
+        font-size: 16px;
+        margin: 18px 0 8px 0;
+      }
+      .muted {
+        color: #374151;
+        font-size: 12.5px;
+        line-height: 1.5;
+      }
+
+      .candidate-card {
+        padding: 14px 16px;
+        border-radius: 12px;
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        box-shadow: 0 10px 18px rgba(0,0,0,0.06);
+        margin-bottom: 12px;
+      }
+      .candidate-card h3 {
+        margin: 0 0 8px 0;
+        font-size: 14px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .rank-pill {
+        display: inline-block;
+        padding: 3px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        background: #1d4ed8;
+        color: #ffffff;
+      }
+      .score-badge {
+        display: inline-block;
+        padding: 3px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        background: #f3f4f6;
+        border: 1px solid #e5e7eb;
+        color: #111827;
+      }
+      ul {
+        margin: 0;
+        padding-left: 18px;
+        font-size: 12.5px;
+        line-height: 1.45;
+      }
+      li { margin: 4px 0; }
+      b { color: #111827; }
+
+      /* Ensure long text wraps nicely */
+      .wrap {
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+    </style>
+    """
+
+    # Build cards using the same fields you show in Streamlit
+    cards_html = []
+    for row in rows:
+        name = str(row.get("candidate_name", "N/A"))
+        final_rank = row.get("final_rank", 0)
+        final_score = row.get("final_score", row.get("score", 0))
+        initial_score = row.get("score", 0)
+        one_line_reason = row.get("one_line_reason", "") or "—"
+        match_summary = row.get("match_summary", "") or "—"
+        rerank_reason = row.get("rerank_reason", "") or "—"
+        seniority = row.get("seniority", "") or "—"
+        recency = row.get("recency", "") or "—"
+        top_tech = ", ".join(row.get("top_tech", []) or []) or "—"
+        key_projects = "; ".join([p for p in (row.get("key_projects", []) or []) if p]) or "—"
+        key_gaps = "; ".join([g for g in (row.get("key_gaps", []) or []) if g]) or "—"
+
+        def esc(s: str) -> str:
+            return (
+                s.replace("&", "&amp;")
+                 .replace("<", "&lt;")
+                 .replace(">", "&gt;")
+            )
+
+        cards_html.append(f"""
+        <div class="candidate-card">
+          <h3 class="wrap">
+            <span class="rank-pill">#{final_rank}</span>
+            {esc(name)}
+            <span class="score-badge">Final: {final_score}/100 · Initial: {initial_score}/100</span>
+          </h3>
+          <ul class="wrap">
+            <li><b>Initial one-line reason:</b> {esc(one_line_reason)}</li>
+            <li><b>Initial match summary:</b> {esc(match_summary)}</li>
+            <li><b>Re-ranking reason:</b> {esc(rerank_reason)}</li>
+            <li><b>Seniority:</b> {esc(seniority)}</li>
+            <li><b>Recency:</b> {esc(recency)}</li>
+            <li><b>Top tech:</b> {esc(top_tech)}</li>
+            <li><b>Key projects:</b> {esc(key_projects)}</li>
+            <li><b>Key gaps:</b> {esc(key_gaps)}</li>
+          </ul>
+        </div>
+        """)
+
+    html = f"""
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        {css}
+      </head>
+      <body>
+        <h1>Resume Ranker – Final Rankings</h1>
+
+        <h2>Job Description</h2>
+        <div class="muted wrap">{jd_safe or "—"}</div>
+
+        <h2>Ranked Candidates</h2>
+        {''.join(cards_html) if cards_html else '<div class="muted">No candidates.</div>'}
+      </body>
+    </html>
+    """
+
+    # Use Playwright to print HTML to PDF bytes
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+        page = browser.new_page(viewport={"width": 1280, "height": 720})
+        page.set_content(html, wait_until="load")
+        pdf_bytes = page.pdf(
+            format="Letter",
+            print_background=True,
+            margin={"top": "0.5in", "right": "0.5in", "bottom": "0.5in", "left": "0.5in"},
+        )
+        browser.close()
+
+    return pdf_bytes
+
+
 def main():
     st.set_page_config(page_title="Resume Ranker", page_icon="📄", layout="wide")
     _inject_custom_css()
@@ -787,6 +946,13 @@ def main():
         st.success("Ranking successful")
 
         render_results(ranked)
+        pdf_bytes = build_rankings_pdf_bytes_like_streamlit(jd, ranked)
+        st.download_button(
+            label="Download rankings as PDF",
+            data=pdf_bytes,
+            file_name="resume_rankings.pdf",
+            mime="application/pdf",
+        )
 
 
 
