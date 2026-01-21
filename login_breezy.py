@@ -5,6 +5,7 @@ import time
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
 import streamlit as st
+
 load_dotenv()
 
 DEFAULT_OUTPUT_DIR = "resume_pdfs"
@@ -13,7 +14,9 @@ def _robust_login(page, email: str, password: str, max_attempts: int = 3):
     # Single-attempt login (ignore max_attempts)
     print("Opening Breezy login page...")
     page.goto("https://app.breezy.hr/signin", wait_until="domcontentloaded")
-
+    page.wait_for_timeout(2000)
+    screenshot_bytes = page.screenshot(full_page=True)
+    st.image(screenshot_bytes, caption="Breezy page after navigation")
     # --- LOGIN ---
     page.wait_for_load_state("domcontentloaded")
     page.wait_for_timeout(1500)
@@ -21,7 +24,7 @@ def _robust_login(page, email: str, password: str, max_attempts: int = 3):
     # Wait for any likely login form/email input
     page.wait_for_selector(
         "form, input[type='email'], input[name='email'], input[name='email_address']",
-        timeout=60000
+        timeout=30000
     )
 
     # Fill email (try multiple possibilities)
@@ -50,7 +53,7 @@ def _robust_login(page, email: str, password: str, max_attempts: int = 3):
 
 
     # Wait until main Breezy dashboard loads
-    page.wait_for_url("**/app/**", timeout=60000)
+    page.wait_for_url("**/app/**", timeout=30000)
     print("Successfully logged in!")
 
 
