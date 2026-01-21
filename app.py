@@ -2,6 +2,7 @@ import io
 import json
 import os
 from typing import Dict, List, Tuple
+import csv
 
 from openai import OpenAI
 import streamlit as st
@@ -614,6 +615,7 @@ def rank_resumes(
             debug_raw=debug_raw,
         )
         result["id"] = str(idx)
+        result["resume_url"] = upload.resume_url
         evaluated.append(result)
 
     # UI note: show how many were filtered out
@@ -658,6 +660,7 @@ def render_results(rows: List[Dict]):
         top_skills = row.get("top_skills", [])
         key_projects = row.get("key_projects", [])
         key_gaps = row.get("key_gaps", [])
+        resume_url = row.get("resume_url")
 
         skills_str = ", ".join(top_skills) if top_skills else "—"
         project_str = "; ".join(p for p in key_projects if p) if key_projects else "—"
@@ -679,6 +682,8 @@ def render_results(rows: List[Dict]):
             <li><b>Top skills:</b> {skills_str}</li>
             <li><b>Key projects:</b> {project_str}</li>
             <li><b>Key gaps vs JD:</b> {gaps_str}</li>
+            <li><b>Resume:</b> {f'<a href="{resume_url}" target="_blank">Get Candidate Info</a>' if resume_url else "—"}</li>
+
           </ul>
         </div>
         """
@@ -781,6 +786,7 @@ def build_rankings_pdf_bytes_like_streamlit(job_description: str, rows: List[Dic
         top_skills = ", ".join(row.get("top_skills", []) or []) or "—"
         key_projects = "; ".join([p for p in (row.get("key_projects", []) or []) if p]) or "—"
         key_gaps = "; ".join([g for g in (row.get("key_gaps", []) or []) if g]) or "—"
+        resume_url = row.get("resume_url")
 
         def esc(s: str) -> str:
             return (
@@ -805,6 +811,10 @@ def build_rankings_pdf_bytes_like_streamlit(job_description: str, rows: List[Dic
             <li><b>Top skills:</b> {esc(top_skills)}</li>
             <li><b>Key projects:</b> {esc(key_projects)}</li>
             <li><b>Key gaps:</b> {esc(key_gaps)}</li>
+            <li>
+                <b>Resume:</b>
+                {f'<a href="{resume_url}">Get Candidate Info</a>' if resume_url else "—"}
+            </li>
           </ul>
         </div>
         """)
@@ -895,6 +905,21 @@ def main():
         os.makedirs(os.path.dirname(tmp_csv_path), exist_ok=True)
         with open(tmp_csv_path, "wb") as f:
             f.write(csv_file.getvalue())
+        
+        # Build resume filename -> resume URL map (used later for links)
+        resume_url_map = {}
+
+        csv_file.seek(0)
+        decoded = csv_file.getvalue().decode("utf-8").splitlines()
+        reader = csv.DictReader(decoded)
+
+        for row in reader:
+            name = (row.get("name") or "").strip() or "candidate"
+            url = (row.get("resume") or "").strip()
+            if not url:
+                continue
+            filename = f"{name.replace(' ', '_')}.pdf"
+            resume_url_map[filename] = url
 
         # Clear old PDFs
         pdf_dir = "resume_pdfs"
@@ -941,6 +966,7 @@ def main():
                 continue
             buffer = io.BytesIO(data)
             buffer.name = fname
+            buffer.resume_url = resume_url_map.get(fname)
             uploads.append(buffer)
 
         # --- RANKING ---
