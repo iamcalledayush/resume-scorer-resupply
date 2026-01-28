@@ -636,7 +636,6 @@ def rank_resumes(
         )
         result["filename"] = upload.name
         result["id"] = upload.name  # stable id
-        result["resume_url"] = upload.resume_url
         result["resume_bytes"] = upload.getvalue()
         evaluated.append(result)
 
@@ -682,7 +681,6 @@ def render_results(rows: List[Dict]):
         top_skills = row.get("top_skills", [])
         key_projects = row.get("key_projects", [])
         key_gaps = row.get("key_gaps", [])
-        resume_url = row.get("resume_url")
 
         skills_str = ", ".join(top_skills) if top_skills else "—"
         project_str = "; ".join(p for p in key_projects if p) if key_projects else "—"
@@ -820,7 +818,6 @@ def build_rankings_pdf_bytes_like_streamlit(job_description: str, rows: List[Dic
         top_skills = ", ".join(row.get("top_skills", []) or []) or "—"
         key_projects = "; ".join([p for p in (row.get("key_projects", []) or []) if p]) or "—"
         key_gaps = "; ".join([g for g in (row.get("key_gaps", []) or []) if g]) or "—"
-        resume_url = row.get("resume_url")
 
         filename = row.get("filename")
         resume_link = None
@@ -1041,7 +1038,6 @@ def main():
                 continue
             buffer = io.BytesIO(data)
             buffer.name = fname
-            buffer.resume_url = resume_url_map.get(fname)
             uploads.append(buffer)
 
         # --- RANKING ---
@@ -1053,7 +1049,7 @@ def main():
 
     if "ranked" in st.session_state and st.session_state["ranked"]:
         st.markdown("---")
-        app_base_url = os.getenv("APP_BASE_URL", "")
+        app_base_url = os.getenv("APP_BASE_URL", "").strip()
         pdf_bytes = build_rankings_pdf_bytes_like_streamlit(
             st.session_state.get("jd", ""),
             st.session_state["ranked"],
