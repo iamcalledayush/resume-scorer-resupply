@@ -107,6 +107,35 @@ def _inject_custom_css() -> None:
         unsafe_allow_html=True,
     )
 
+def _responses_create_json(client: OpenAI, model: str, content: List[Dict], temperature: float = 0):
+    """
+    Wrapper for responses.create() without response_format
+    (SDK compatibility-safe).
+    """
+    return client.responses.create(
+        model=model,
+        input=[{"role": "user", "content": content}],
+        temperature=temperature,
+    )
+
+def build_jd_requirements_prompt(job_description: str) -> str:
+    return f"""
+You are analyzing a job description.
+
+Task:
+Extract what this role ACTUALLY prioritizes.
+
+Return STRICT JSON with:
+- "core_competencies": ordered list of the most important competencies (e.g., statistical reasoning, experimentation, BI, ML, backend engineering, stakeholder reporting)
+- "must_haves": list of truly required skills/experiences
+- "nice_to_haves": list of secondary or optional skills
+- "role_type": short phrase describing the role archetype (e.g., "statistical product data scientist", "BI-focused analyst", "ML engineer")
+
+Job Description:
+\"\"\"{job_description}\"\"\"
+""".strip()
+
+
 def build_location_gate_prompt() -> str:
     return """
 You are extracting a candidate's current (or most recent) US state from a resume PDF.
@@ -130,7 +159,7 @@ Return STRICT JSON only:
 """.strip()
 
 
-def build_prompt(job_description: str, resume_filename: str) -> str:
+def build_prompt(job_description: str, jd_requirements: Dict, resume_filename: str) -> str:
     """Build the per-resume evaluation prompt sent to the LLM."""
     return f"""
 You are an expert recruiter and hiring manager.
@@ -138,12 +167,22 @@ You are an expert recruiter and hiring manager.
 Task:
 Given a job description and ONE candidate's resume (attached as a PDF), evaluate how well this candidate fits the role purely from a job-requirements perspective.
 
-Focus rules:
-- Focus ONLY on role-relevant qualifications: required skills, relevant experience, certifications/licenses (if applicable), domain knowledge, and concrete accomplishments.
-- Ignore JD fluff (benefits, company description, perks, HR boilerplate, etc.).
-- Use reasonable inference for closely related skills when clearly implied by the resume (do not invent credentials).
-- Do NOT guess qualifications that are not clearly implied by the resume.
-- You already have access to the full text of the attached PDF. NEVER say you cannot parse the PDF. NEVER ask the user to resend the resume text.
+Evaluation rules (CRITICAL):
+You MUST evaluate this resume ONLY against the job requirements provided below.
+These requirements were extracted directly from the job description and are the
+authoritative definition of what this role prioritizes.
+
+Job requirements:
+- Core competencies: {jd_requirements.get("core_competencies", [])}
+- Must-haves: {jd_requirements.get("must_haves", [])}
+- Nice-to-haves: {jd_requirements.get("nice_to_haves", [])}
+- Role type: {jd_requirements.get("role_type", "")}
+
+Rules:
+- Base the score primarily on evidence for the core competencies and must-haves above.
+- Do NOT reward skills, tools, accomplishments, or experience that are not relevant to these requirements.
+- Depth and quality of evidence matters more than breadth of unrelated experience.
+- If the resume is strong in areas not emphasized above, do NOT increase the score for those areas.
 
 Scoring rubric (0–100):
 - 0–20: Almost no overlap with the JD’s core requirements.
@@ -311,6 +350,7 @@ Schema:
         repair_response = client.responses.create(
             model="gpt-4o",
             input=[{"role": "user", "content": [{"type": "input_text", "text": repair_prompt}]}],
+            temperature=0,
             # response_format={"type": "json_object"},
         )
     except Exception:
@@ -325,127 +365,76 @@ def location_gate(
 ) -> Dict:
     prompt = build_location_gate_prompt()
 
-    resp = client.responses.create(
-        model="gpt-4o-mini",
-        input=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "input_text", "text": prompt},
-                    {"type": "input_file", "file_id": file_id},
-                ],
-            }
-        ],
-        # response_format={"type": "json_object"},
-    )
+    try:
+        resp = _responses_create_json(
+            client,
+            model="gpt-4o-mini",
+            content=[
+                {"type": "input_text", "text": prompt},
+                {"type": "input_file", "file_id": file_id},
+            ],
+            temperature=0,
+        )
+        raw = _extract_text_from_response(resp)
+        data = _parse_json_generic(raw)
+    except Exception as e:
+        raw = f"<location_gate_error> {e}"
+        data = {}
 
-    raw = _extract_text_from_response(resp)
-    data = _parse_json_generic(raw)
+    allow = data.get("allow", None)
+    reason = (data.get("reason") or "").strip()
 
-    allow = bool(data.get("allow", False))
-    reason = (data.get("reason") or "").strip() or "No reason provided."
+    # If anything went wrong, DO NOT silently reject. Mark as "unknown" and keep.
+    # You can flip this behavior if you want strict filtering.
+    if allow is None:
+        allow = True
+        reason = reason or "Location unclear (gate parse failed) — allowed by fail-open policy."
+
+    if not isinstance(allow, bool):
+        allow = True
+        reason = reason or "Location unclear (invalid allow type) — allowed by fail-open policy."
 
     if debug_raw:
         st.markdown(f"**Debug: location gate output for `{resume_filename}`**")
         st.code(raw or "<empty>")
 
-    return {"allow": allow, "reason": reason}
+    return {"allow": allow, "reason": reason or "No reason provided."}
+
 
 def evaluate_resume_with_file_id(
-    client: OpenAI, job_description: str, file_id: str, resume_filename: str, debug_raw: bool = False
+    client: OpenAI,
+    job_description: str,
+    jd_requirements: Dict,
+    file_id: str,
+    resume_filename: str,
+    debug_raw: bool = False,
 ) -> Dict:
-    prompt = build_prompt(job_description, resume_filename)
+    prompt = build_prompt(job_description, jd_requirements, resume_filename)
 
-    response = client.responses.create(
-        model="gpt-4o",
-        input=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "input_text", "text": prompt},
-                    {"type": "input_file", "file_id": file_id},
-                ],
-            }
-        ],
-        # response_format={"type": "json_object"},
-    )
+    try:
+        response = _responses_create_json(
+            client,
+            model="gpt-4o",
+            content=[
+                {"type": "input_text", "text": prompt},
+                {"type": "input_file", "file_id": file_id},
+            ],
+            temperature=0,
+        )
+        content = _extract_text_from_response(response)
+        parsed = _parse_json_safe(content, resume_filename)
+    except Exception as e:
+        content = f"<evaluate_error> {e}"
+        parsed = _parse_json_safe("{}", resume_filename)
+        parsed["one_line_reason"] = f"Evaluation error: {e}"
+        parsed["key_gaps"] = ["Evaluation error"]
 
-    content = _extract_text_from_response(response)
-    parsed = _parse_json_safe(content, resume_filename)
-
-    is_default = (
-        parsed.get("score", 0) == 0
-        and parsed.get("one_line_reason") == "No one-line reason returned."
-    )
-    repaired = {}
-    if is_default and content.strip():
-        repaired = _repair_json_with_llm(client, content, resume_filename)
-        if repaired.get("score", 0) != 0 or repaired.get("one_line_reason") != "No one-line reason returned.":
-            parsed = repaired
-
-    if debug_raw or is_default:
+    if debug_raw:
         st.markdown(f"**Debug: raw LLM output for `{resume_filename}`**")
         st.code(content or "<empty content>")
-        if repaired:
-            st.markdown("**Debug: repaired JSON candidate**")
-            st.code(json.dumps(repaired, indent=2))
 
     return parsed
 
-
-def evaluate_resume(
-    client: OpenAI, job_description: str, upload, debug_raw: bool = False
-) -> Dict:
-    """Upload one PDF and call the LLM to score that resume (pass 1)."""
-    file_bytes = upload.getvalue()
-    buffer = io.BytesIO(file_bytes)
-    buffer.name = upload.name
-
-    uploaded_file = client.files.create(file=buffer, purpose="assistants")
-    prompt = build_prompt(job_description, upload.name)
-
-    response = client.responses.create(
-        model="gpt-4o",
-        input=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "input_text", "text": prompt},
-                    {"type": "input_file", "file_id": uploaded_file.id},
-                ],
-            }
-        ],
-        # If your SDK supports response_format, you can add it back for stricter JSON:
-        # response_format={"type": "json_object"},
-    )
-
-    content = _extract_text_from_response(response)
-    parsed = _parse_json_safe(content, upload.name)
-
-    # If parsing clearly failed (default structure), try a one-shot JSON repair
-    # using the model itself before giving up.
-    is_default = (
-        parsed.get("score", 0) == 0
-        and parsed.get("one_line_reason") == "No one-line reason returned."
-    )
-    repaired = {}
-    if is_default and content.strip():
-        repaired = _repair_json_with_llm(client, content, upload.name)
-        # If repair produced something more informative, prefer it
-        if repaired.get("score", 0) != 0 or repaired.get(
-            "one_line_reason"
-        ) != "No one-line reason returned.":
-            parsed = repaired
-
-    # Optional debug: show raw model output (and repaired JSON if any)
-    if debug_raw or is_default:
-        st.markdown(f"**Debug: raw LLM output for `{upload.name}`**")
-        st.code(content or "<empty content>")
-        if repaired:
-            st.markdown("**Debug: repaired JSON candidate**")
-            st.code(json.dumps(repaired, indent=2))
-
-    return parsed
 
 
 def _build_candidate_summary(candidate_id: str, data: Dict) -> str:
@@ -467,116 +456,146 @@ def _build_candidate_summary(candidate_id: str, data: Dict) -> str:
 
 
 def _build_rerank_prompt(job_description: str, summaries_text: str) -> str:
-    """Build the prompt used for pass 2: relative re-ranking from summaries."""
     return f"""
-You are an expert recruiter and hiring manager.
+        You are an expert recruiter and hiring manager.
 
-Task:
-Given a job description and a list of candidate summaries, produce a FINAL ranking of candidates for this single role.
+        Task:
+        Given a job description and candidate summaries, produce the FINAL ranked list for ONE role.
 
-Each candidate summary line has:
-- an id,
-- candidate name,
-- the initial fit score (0–100) from a previous evaluation,
-- a short reason for that score,
-- seniority and recency hints,
-- key skills or qualifications,
-- key projects,
-- key gaps vs. the job description.
+        Rules:
+        - Rank candidates AGAINST EACH OTHER (comparative).
+        - Stay STRICTLY aligned to the job description.
+        - Prefer evidence-backed fit: must-haves coverage, depth, recency, relevance.
+        - Do NOT reward impressive but irrelevant experience.
 
-Instructions:
-- Treat candidates as COMPETING for ONE open role.
-- Compare candidates AGAINST EACH OTHER, not in isolation.
-- Use the initial score as a signal, but you may adjust it for relative comparison.
-- Prefer candidates whose skills, qualifications, and experience best match the job’s core requirements and seniority level.
-- Consider coverage of must-have requirements, depth and recency of experience, and relevance to the role’s responsibilities.
-- If multiple candidates are very similar, you may keep scores close and differentiate ranks by small adjustments.
- - You ONLY see these summaries, not the original PDFs. NEVER ask for PDFs or additional resume text. If a summary contains almost no information, still return an entry with final_score=0 and a clear rerank_reason like "Summary contained insufficient information to evaluate.".
+        Output STRICT JSON only with exactly:
+        {{
+        "ranked": [
+            {{
+            "id": "candidate_id",
+            "final_score": 0-100 integer,
+            "why": "one short sentence why this rank"
+            }}
+        ]
+        }}
 
-Output JSON schema:
-Return STRICT JSON only (no extra text, no code fences, no commentary) with a single key:
-- "candidates": array of objects, sorted from BEST to WORST fit, each object with:
-  - "id": candidate id from the summaries.
-  - "candidate_name": candidate name.
-  - "final_score": integer 0–100 (your adjusted score for relative ranking).
-  - "rank": integer rank (1 = best).
-  - "rerank_reason": one or two very short phrases explaining this candidate’s placement relative to others.
+        Constraints:
+        - Include EVERY id exactly once.
+        - Sort best -> worst.
+        - final_score must be monotonic non-increasing down the list (ties allowed).
 
-Job Description:
-\"\"\"{job_description}\"\"\"
+        Job Description:
+        \"\"\"{job_description}\"\"\"
 
-Candidate summaries:
-{summaries_text}
-""".strip()
+        Candidate summaries:
+        {summaries_text}
+        """.strip()
+
 
 
 def _rerank_candidates(
     client: OpenAI, job_description: str, evaluated: List[Dict], debug_raw: bool = False
 ) -> List[Dict]:
-    """Second pass: re-rank candidates based on compact summaries."""
     if not evaluated:
         return []
 
-    # Assign stable ids if not present
     indexed = []
     summaries = []
-    for idx, data in enumerate(evaluated, start=1):
-        candidate_id = str(data.get("id", idx))
-        data["id"] = candidate_id
+    for data in evaluated:
+        candidate_id = data["filename"]
+        data["id"] = str(candidate_id)
         indexed.append(data)
         summaries.append(_build_candidate_summary(candidate_id, data))
 
     summaries_text = "\n".join(summaries)
     prompt = _build_rerank_prompt(job_description, summaries_text)
 
-    response = client.responses.create(
-        model="gpt-4o",
-        input=[{"role": "user", "content": [{"type": "input_text", "text": prompt}]}],
-        # response_format={"type": "json_object"},
-    )
-
-    content = _extract_text_from_response(response)
-    if debug_raw:
-        st.markdown("**Debug: raw LLM output for re-ranking call**")
-        st.code(content or "<empty content>")
-
-    data = _parse_json_generic(content)
-    candidates = data.get("candidates")
-    if not isinstance(candidates, list):
-        # Fallback: sort by initial score only
-        fallback_sorted = sorted(
-            indexed, key=lambda item: item.get("score", 0), reverse=True
+    try:
+        response = _responses_create_json(
+            client,
+            model="gpt-4o",
+            content=[{"type": "input_text", "text": prompt}],
+            temperature=0,
         )
+        content = _extract_text_from_response(response)
+        if debug_raw:
+            st.markdown("**Debug: raw LLM output for re-ranking call**")
+            st.code(content or "<empty content>")
+
+        data = _parse_json_generic(content)
+        ranked = data.get("ranked", [])
+    except Exception as e:
+        ranked = []
+        content = f"<rerank_error> {e}"
+        if debug_raw:
+            st.markdown("**Debug: rerank error**")
+            st.code(content)
+
+    # Fallback if rerank fails: sort by Stage-1 score
+    if not isinstance(ranked, list) or not ranked:
+        fallback_sorted = sorted(indexed, key=lambda item: item.get("score", 0), reverse=True)
         for rank, row in enumerate(fallback_sorted, start=1):
-            row["final_score"] = row.get("score", 0)
             row["final_rank"] = rank
-            row["rerank_reason"] = "Ranked by initial role-fit score only."
+            row["final_score"] = row.get("score", 0)
+            row["rerank_reason"] = "Rerank failed; ranked by initial role-fit score."
         return fallback_sorted
 
-    # Map id -> initial candidate data
-    by_id = {c["id"]: c for c in indexed}
-    merged: List[Dict] = []
-    for entry in candidates:
-        cid = str(entry.get("id", ""))
+    by_id = {str(c["id"]): c for c in indexed}
+    merged = []
+    seen = set()
+
+    for rank_pos, item in enumerate(ranked, start=1):
+        cid = str(item.get("id", ""))
+        if not cid or cid in seen:
+            continue
         base = by_id.get(cid)
         if not base:
             continue
-        merged_row = dict(base)
-        merged_row["final_score"] = entry.get("final_score", base.get("score", 0))
-        merged_row["final_rank"] = entry.get("rank", 0)
-        merged_row["rerank_reason"] = entry.get(
-            "rerank_reason", "No additional re-ranking reason provided."
-        )
-        merged.append(merged_row)
 
-    # Ensure sorted by final_rank
-    merged.sort(key=lambda r: r.get("final_rank", 0) or 1_000_000)
+        seen.add(cid)
+        row = dict(base)
+        row["final_rank"] = rank_pos
+        row["final_score"] = int(item.get("final_score", row.get("score", 0)) or row.get("score", 0))
+        row["rerank_reason"] = (item.get("why") or "Re-ranked by relative fit.").strip()
+        merged.append(row)
+
+    # Append any missing deterministically
+    missing = [by_id[cid] for cid in by_id.keys() if cid not in seen]
+    missing_sorted = sorted(missing, key=lambda r: r.get("score", 0), reverse=True)
+    start_rank = len(merged) + 1
+    for i, base in enumerate(missing_sorted, start=start_rank):
+        row = dict(base)
+        row["final_rank"] = i
+        row["final_score"] = row.get("score", 0)
+        row["rerank_reason"] = "Missing from rerank output; appended by initial score."
+        merged.append(row)
+
     return merged
+
 
 
 def rank_resumes(
     client: OpenAI, job_description: str, uploads, debug_raw: bool = False
 ):
+    # ---- PRE-STAGE: extract JD requirements ----
+    jd_req_prompt = build_jd_requirements_prompt(job_description)
+
+    jd_resp = _responses_create_json(
+        client,
+        model="gpt-4o",
+        content=[{"type": "input_text", "text": jd_req_prompt}],
+        temperature=0,
+    )
+
+    jd_raw = _extract_text_from_response(jd_resp)
+    jd_requirements = _parse_json_generic(jd_raw)
+
+    # Hard defaults so prompts are stable even if JD extraction is weird
+    jd_requirements.setdefault("core_competencies", [])
+    jd_requirements.setdefault("must_haves", [])
+    jd_requirements.setdefault("nice_to_haves", [])
+    jd_requirements.setdefault("role_type", "")
+
     evaluated: List[Dict] = []
     skipped: List[Dict] = []
 
@@ -610,12 +629,15 @@ def rank_resumes(
         result = evaluate_resume_with_file_id(
             client,
             job_description=job_description,
+            jd_requirements=jd_requirements,
             file_id=file_id,
             resume_filename=upload.name,
             debug_raw=debug_raw,
         )
-        result["id"] = str(idx)
+        result["filename"] = upload.name
+        result["id"] = upload.name  # stable id
         result["resume_url"] = upload.resume_url
+        result["resume_bytes"] = upload.getvalue()
         evaluated.append(result)
 
     # UI note: show how many were filtered out
@@ -682,16 +704,24 @@ def render_results(rows: List[Dict]):
             <li><b>Top skills:</b> {skills_str}</li>
             <li><b>Key projects:</b> {project_str}</li>
             <li><b>Key gaps vs JD:</b> {gaps_str}</li>
-            <li><b>Resume:</b> {f'<a href="{resume_url}" target="_blank">Get Candidate Info</a>' if resume_url else "—"}</li>
 
           </ul>
         </div>
         """
         st.markdown(html, unsafe_allow_html=True)
+        # ---- Resume download button (Railway-safe) ----
+        if row.get("resume_bytes"):
+            st.download_button(
+                label="Get Candidate Info (PDF)",
+                data=row["resume_bytes"],
+                file_name=row["filename"],
+                mime="application/pdf",
+                key=f"download-{row['filename']}"
+            )
 
 
 # To download rankings in a pdf
-def build_rankings_pdf_bytes_like_streamlit(job_description: str, rows: List[Dict]) -> bytes:
+def build_rankings_pdf_bytes_like_streamlit(job_description: str, rows: List[Dict], app_base_url: str) -> bytes:
     """
     Build a PDF by rendering Streamlit-like HTML cards using Playwright's PDF printer.
     """
@@ -714,6 +744,10 @@ def build_rankings_pdf_bytes_like_streamlit(job_description: str, rows: List[Dic
       h2 {
         font-size: 16px;
         margin: 18px 0 8px 0;
+      }
+      a {
+        color: #1d4ed8;
+        text-decoration: underline;
       }
       .muted {
         color: #374151;
@@ -788,6 +822,11 @@ def build_rankings_pdf_bytes_like_streamlit(job_description: str, rows: List[Dic
         key_gaps = "; ".join([g for g in (row.get("key_gaps", []) or []) if g]) or "—"
         resume_url = row.get("resume_url")
 
+        filename = row.get("filename")
+        resume_link = None
+        if app_base_url and filename:
+            resume_link = f"{app_base_url.rstrip('/')}/?resume={filename}"
+
         def esc(s: str) -> str:
             return (
                 s.replace("&", "&amp;")
@@ -813,7 +852,7 @@ def build_rankings_pdf_bytes_like_streamlit(job_description: str, rows: List[Dic
             <li><b>Key gaps:</b> {esc(key_gaps)}</li>
             <li>
                 <b>Resume:</b>
-                {f'<a href="{resume_url}">Get Candidate Info</a>' if resume_url else "—"}
+                {f'<a href="{resume_link}">Get Candidate Info</a>' if resume_link else "—"}
             </li>
           </ul>
         </div>
@@ -855,6 +894,31 @@ def build_rankings_pdf_bytes_like_streamlit(job_description: str, rows: List[Dic
 
 
 def main():
+    # ---- Resume proxy handler (for PDF links) ----
+    params = st.query_params
+    resume_name = params.get("resume")
+
+    if resume_name:
+        resume_path = os.path.join("resume_pdfs", resume_name)
+
+        if os.path.exists(resume_path):
+            with open(resume_path, "rb") as f:
+                pdf_bytes = f.read()
+
+            st.download_button(
+                label="Download resume",
+                data=pdf_bytes,
+                file_name=resume_name,
+                mime="application/pdf",
+                key="proxy-download",
+            )
+            st.stop()
+        else:
+            st.error("Resume not found.")
+            st.stop()
+
+
+
     st.set_page_config(page_title="Resume Ranker", page_icon="📄", layout="wide")
     _inject_custom_css()
     
@@ -900,30 +964,41 @@ def main():
             st.error("Upload a candidates CSV file.")
             return
 
-        # Save CSV to disk so login_breezy can use it
-        tmp_csv_path = os.path.join("resume_pdfs", "uploaded_candidates.csv")
+        # Normalize CSV into an internal CSV with deterministic filenames
+        tmp_csv_path = os.path.join("resume_pdfs", "uploaded_candidates.normalized.csv")
         os.makedirs(os.path.dirname(tmp_csv_path), exist_ok=True)
-        with open(tmp_csv_path, "wb") as f:
-            f.write(csv_file.getvalue())
-        
-        # Build resume filename -> resume URL map (used later for links)
-        resume_url_map = {}
 
         csv_file.seek(0)
         decoded = csv_file.getvalue().decode("utf-8").splitlines()
         reader = csv.DictReader(decoded)
 
+        normalized_rows = []
+        resume_url_map = {}
+
+        i = 0
         for row in reader:
             name = (row.get("name") or "").strip() or "candidate"
             url = (row.get("resume") or "").strip()
-            if not url:
+
+            # Skip rows that can't be downloaded
+            if not url or not url.startswith("http"):
                 continue
-            filename = f"{name.replace(' ', '_')}.pdf"
+
+            i += 1
+            filename = f"{name.replace(' ', '_')}__{i}.pdf"
+
             resume_url_map[filename] = url
+            normalized_rows.append({"name": name, "resume": url, "filename": filename})
+
+        # Write the normalized CSV that Breezy downloader will use
+        with open(tmp_csv_path, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=["name", "resume", "filename"])
+            w.writeheader()
+            w.writerows(normalized_rows)
 
         # Clear old PDFs
         pdf_dir = "resume_pdfs"
-        for fname in os.listdir(pdf_dir):
+        for fname in sorted(os.listdir(pdf_dir)):
             if fname.lower().endswith(".pdf"):
                 try:
                     os.remove(os.path.join(pdf_dir, fname))
@@ -955,7 +1030,7 @@ def main():
 
         # --- PREPARE FILES ---
         uploads = []
-        for fname in os.listdir(pdf_dir):
+        for fname in sorted(os.listdir(pdf_dir)):
             if not fname.lower().endswith(".pdf"):
                 continue
             path = os.path.join(pdf_dir, fname)
@@ -973,17 +1048,26 @@ def main():
         st.markdown("### Ranking resumes")
         with st.spinner("Ranking resumes..."):
             ranked = rank_resumes(client, jd, uploads, debug_raw=debug_raw)
+            st.session_state["ranked"] = ranked
+            st.session_state["jd"] = jd
 
-        st.success("Ranking successful")
-        pdf_bytes = build_rankings_pdf_bytes_like_streamlit(jd, ranked)
+    if "ranked" in st.session_state and st.session_state["ranked"]:
+        st.markdown("---")
+        app_base_url = os.getenv("APP_BASE_URL", "")
+        pdf_bytes = build_rankings_pdf_bytes_like_streamlit(
+            st.session_state.get("jd", ""),
+            st.session_state["ranked"],
+            app_base_url=app_base_url,
+        )
         st.download_button(
             label="Download rankings as PDF",
             data=pdf_bytes,
             file_name="resume_rankings.pdf",
             mime="application/pdf",
+            key="download-rankings-pdf"
         )
         st.markdown("---")
-        render_results(ranked)
+        render_results(st.session_state["ranked"])
 
 
 

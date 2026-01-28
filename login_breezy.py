@@ -95,7 +95,7 @@ def download_resumes_from_csv_with_page(
     with open(csv_path, newline="") as f:
         reader = csv.DictReader(f)
 
-        for row in reader:
+        for idx, row in enumerate(reader, start=1):
             name = (row.get("name") or "").strip() or "candidate"
             url = (row.get("resume") or "").strip()
 
@@ -110,7 +110,7 @@ def download_resumes_from_csv_with_page(
 
             download = download_info.value
             safe_name = name.replace(" ", "_")
-            filename = f"{safe_name}.pdf"
+            filename = (row.get("filename") or f"{safe_name}__{idx}.pdf").strip()
             filepath = os.path.join(output_dir, filename)
             download.save_as(filepath)
             print(f"Saved: {filename}")
@@ -159,7 +159,7 @@ def download_resumes_from_csv(
         with open(csv_path, newline="") as f:
             reader = csv.DictReader(f)
 
-            for row in reader:
+            for idx, row in enumerate(reader, start=1):
                 name = (row.get("name") or "").strip() or "candidate"
                 url = (row.get("resume") or "").strip()
 
@@ -174,7 +174,7 @@ def download_resumes_from_csv(
 
                 download = download_info.value
                 safe_name = name.replace(" ", "_")
-                filename = f"{safe_name}.pdf"
+                filename = f"{safe_name}__{idx}.pdf"
                 filepath = os.path.join(output_dir, filename)
                 download.save_as(filepath)
                 print(f"Saved: {filename}")
