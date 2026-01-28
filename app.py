@@ -123,7 +123,7 @@ def build_jd_requirements_prompt(job_description: str) -> str:
 You are analyzing a job description.
 
 Task:
-Extract what this role ACTUALLY prioritizes.
+Extract what this role ACTUALLY prioritizes. EXCLUDE soft skills (communication, teamwork, leadership, collaboration, stakeholder management, motivation, etc.), culture/values, and any HR logistics (like onsite/hybrid/remote requirements, commute, location, relocation, visa/work authorization, start date, travel requirements, company-specific preferences not tied to job performance, etc.).
 
 Return STRICT JSON with:
 - "core_competencies": ordered list of the most important competencies (e.g., statistical reasoning, experimentation, BI, ML, backend engineering, stakeholder reporting)
@@ -166,6 +166,7 @@ You are an expert recruiter and hiring manager.
 
 Task:
 Given a job description and ONE candidate's resume (attached as a PDF), evaluate how well this candidate fits the role purely from a job-requirements perspective.
+EXCLUDE soft skills (communication, teamwork, leadership, collaboration, stakeholder management, motivation, etc.), culture/values, and any HR logistics (like onsite/hybrid/remote requirements, commute, location, relocation, visa/work authorization, start date, travel requirements, company-specific preferences not tied to job performance, etc.).
 
 Evaluation rules (CRITICAL):
 You MUST evaluate this resume ONLY against the job requirements provided below.
@@ -663,6 +664,11 @@ def rank_resumes(
     return ranked
 
 
+def has_rerank_inconsistency(rows: List[Dict]) -> bool:
+    return any(
+        (row.get("rerank_reason") or "").strip() == "Missing from rerank output; appended by initial score."
+        for row in (rows or [])
+    )
 
 def render_results(rows: List[Dict]):
     """Display ranking results in Streamlit."""
@@ -726,6 +732,9 @@ def build_rankings_pdf_bytes_like_streamlit(job_description: str, rows: List[Dic
     """
     jd_safe = (job_description or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     jd_safe = jd_safe.replace("\n", "<br/>")
+    rerank_warning = ""
+    if has_rerank_inconsistency(rows):
+        rerank_warning = '<div style="font-weight:700; margin: 10px 0 14px 0;">Rerun the rankings, they are not consistent.</div>'
 
     # Reuse the same card styling concept (tweaked for white PDF background)
     css = """
@@ -861,6 +870,7 @@ def build_rankings_pdf_bytes_like_streamlit(job_description: str, rows: List[Dic
       </head>
       <body>
         <h1>Resume Ranker – Final Rankings</h1>
+        {rerank_warning}
 
         <h2>Job Description</h2>
         <div class="muted wrap">{jd_safe or "—"}</div>
@@ -1019,6 +1029,8 @@ def main():
 
     if "ranked" in st.session_state and st.session_state["ranked"]:
         st.markdown("---")
+        if has_rerank_inconsistency(st.session_state["ranked"]):
+            st.markdown("**Rerun the rankings, they are not consistent.**")
         pdf_bytes = build_rankings_pdf_bytes_like_streamlit(
             st.session_state.get("jd", ""),
             st.session_state["ranked"],
