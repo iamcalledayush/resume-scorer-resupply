@@ -636,6 +636,7 @@ def rank_resumes(
         )
         result["filename"] = upload.name
         result["id"] = upload.name  # stable id
+        result["resume_url"] = getattr(upload, "resume_url", None)
         result["resume_bytes"] = upload.getvalue()
         evaluated.append(result)
 
@@ -719,7 +720,7 @@ def render_results(rows: List[Dict]):
 
 
 # To download rankings in a pdf
-def build_rankings_pdf_bytes_like_streamlit(job_description: str, rows: List[Dict], app_base_url: str) -> bytes:
+def build_rankings_pdf_bytes_like_streamlit(job_description: str, rows: List[Dict]) -> bytes:
     """
     Build a PDF by rendering Streamlit-like HTML cards using Playwright's PDF printer.
     """
@@ -818,11 +819,8 @@ def build_rankings_pdf_bytes_like_streamlit(job_description: str, rows: List[Dic
         top_skills = ", ".join(row.get("top_skills", []) or []) or "—"
         key_projects = "; ".join([p for p in (row.get("key_projects", []) or []) if p]) or "—"
         key_gaps = "; ".join([g for g in (row.get("key_gaps", []) or []) if g]) or "—"
-
-        filename = row.get("filename")
-        resume_link = None
-        if app_base_url and filename:
-            resume_link = f"{app_base_url.rstrip('/')}/?resume={filename}"
+        resume_url = row.get("resume_url")
+        
 
         def esc(s: str) -> str:
             return (
@@ -849,7 +847,7 @@ def build_rankings_pdf_bytes_like_streamlit(job_description: str, rows: List[Dic
             <li><b>Key gaps:</b> {esc(key_gaps)}</li>
             <li>
                 <b>Resume:</b>
-                {f'<a href="{resume_link}">Get Candidate Info</a>' if resume_link else "—"}
+                {f'<a href="{resume_url}">Get Candidate Info</a>' if resume_url else "—"}
             </li>
           </ul>
         </div>
@@ -891,31 +889,6 @@ def build_rankings_pdf_bytes_like_streamlit(job_description: str, rows: List[Dic
 
 
 def main():
-    # ---- Resume proxy handler (for PDF links) ----
-    params = st.query_params
-    resume_name = params.get("resume")
-
-    if resume_name:
-        resume_path = os.path.join("resume_pdfs", resume_name)
-
-        if os.path.exists(resume_path):
-            with open(resume_path, "rb") as f:
-                pdf_bytes = f.read()
-
-            st.download_button(
-                label="Download resume",
-                data=pdf_bytes,
-                file_name=resume_name,
-                mime="application/pdf",
-                key="proxy-download",
-            )
-            st.stop()
-        else:
-            st.error("Resume not found.")
-            st.stop()
-
-
-
     st.set_page_config(page_title="Resume Ranker", page_icon="📄", layout="wide")
     _inject_custom_css()
     
@@ -1034,6 +1007,7 @@ def main():
                 continue
             buffer = io.BytesIO(data)
             buffer.name = fname
+            buffer.resume_url = resume_url_map.get(fname)
             uploads.append(buffer)
 
         # --- RANKING ---
@@ -1045,11 +1019,9 @@ def main():
 
     if "ranked" in st.session_state and st.session_state["ranked"]:
         st.markdown("---")
-        app_base_url = os.getenv("APP_BASE_URL", "").strip()
         pdf_bytes = build_rankings_pdf_bytes_like_streamlit(
             st.session_state.get("jd", ""),
             st.session_state["ranked"],
-            app_base_url=app_base_url,
         )
         st.download_button(
             label="Download rankings as PDF",
