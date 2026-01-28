@@ -123,10 +123,11 @@ def build_jd_requirements_prompt(job_description: str) -> str:
 You are analyzing a job description.
 
 Task:
-Extract what this role ACTUALLY prioritizes. EXCLUDE soft skills (communication, teamwork, leadership, collaboration, stakeholder management, motivation, etc.), culture/values, and any HR logistics (like onsite/hybrid/remote requirements, commute, location, relocation, visa/work authorization, start date, travel requirements, company-specific preferences not tied to job performance, etc.).
+Extract what this role ACTUALLY prioritizes. EXCLUDE soft skills (communication, teamwork, leadership, collaboration, stakeholder management, motivation, passion, etc.), culture/values, and any HR logistics (like onsite/hybrid/remote requirements, commute, location, relocation, visa/work authorization, start date, travel requirements, company-specific preferences not tied to job performance, etc.).
+Do NOT extract from job responsibilities or industry best practices, just focus on job requirements.
 
 Return STRICT JSON with:
-- "core_competencies": ordered list of the most important competencies (e.g., statistical reasoning, experimentation, BI, ML, backend engineering, stakeholder reporting)
+- "core_competencies": ordered list of the most important competencies
 - "must_haves": list of truly required skills/experiences
 - "nice_to_haves": list of secondary or optional skills
 - "role_type": short phrase describing the role archetype (e.g., "statistical product data scientist", "BI-focused analyst", "ML engineer")
@@ -169,6 +170,7 @@ Given a job description and ONE candidate's resume (attached as a PDF), evaluate
 EXCLUDE soft skills (communication, teamwork, leadership, collaboration, stakeholder management, motivation, etc.), culture/values, and any HR logistics (like onsite/hybrid/remote requirements, commute, location, relocation, visa/work authorization, start date, travel requirements, company-specific preferences not tied to job performance, etc.).
 
 Evaluation rules (CRITICAL):
+Treat ONLY the extracted job requirements below as scorable criteria. Do NOT infer additional criteria from typical responsibilities or industry best practices.
 You MUST evaluate this resume ONLY against the job requirements provided below.
 These requirements were extracted directly from the job description and are the
 authoritative definition of what this role prioritizes.
@@ -183,9 +185,12 @@ Rules:
 - Base the score primarily on evidence for the core competencies and must-haves above.
 - Do NOT reward skills, tools, accomplishments, or experience that are not relevant to these requirements.
 - Depth and quality of evidence matters more than breadth of unrelated experience.
-- If the resume is strong in areas not emphasized above, do NOT increase the score for those areas.
+- When evidence shows the candidate has successfully performed similar underlying responsibilities in a different context, treat this as strong evidence of capability.
 
 Scoring rubric (0–100):
+- Base the score on overall demonstrated capability to perform the role effectively, not on perfect coverage of every listed requirement.
+- If most core competencies are met with strong evidence, do not reduce the score substantially for a small number of gaps.
+- Scores above 80 should be given when the candidate clearly demonstrates they can perform most of the role’s responsibilities well, even if some requirements are only partially evidenced.
 - 0–20: Almost no overlap with the JD’s core requirements.
 - 21–40: Some overlap but many core requirements missing.
 - 41–60: Partial match; several important must-haves missing or shallow.
@@ -198,9 +203,10 @@ Must-have handling:
 - Treat a must-have as SATISFIED if the resume shows the skill explicitly OR shows clearly equivalent evidence (synonyms/near-equivalents).
   Example: “Figma” counts for “Figma developer” if the resume indicates real usage/ownership (design systems, prototypes, UI/UX design work) — do not require the exact word “developer”.
 - Do NOT invent skills. If the resume only lists a keyword with no context, treat it as weak evidence (partial), not missing.
-- If at least ONE clearly required must-have is truly missing (no evidence at all, direct or equivalent): cap score at 60.
-- If SEVERAL clearly required must-haves are truly missing: cap score at 40.
-- If NONE of the JD’s core requirements appear in the resume: cap score at 20.
+- Ignore soft skills like communication, teamwork, leadership, collaboration, stakeholder management, motivation, etc. when considering must-haves.
+- When strong, concrete evidence demonstrates the candidate can perform the underlying responsibilities implied by a must-have, treat it as fully satisfied regardless of how the resume labels the work.
+
+Use the full 0–100 range. Avoid clustering strong candidates narrowly if their demonstrated capabilities meaningfully differ.
 
 Output JSON schema:
 Return STRICT JSON only (no extra text, no code fences, no commentary). Even if the resume is very short or partially unreadable, you MUST still return valid JSON using this schema and set an appropriate low score with clear gaps.
@@ -310,56 +316,6 @@ def _parse_json_generic(raw_text: str) -> Dict:
         data = {}
     return data
 
-
-def _repair_json_with_llm(
-    client: OpenAI, raw_text: str, fallback_name: str
-) -> Dict:
-    """
-    Attempt to repair a non-JSON response by asking the model to rewrite
-    its previous output as strict JSON matching the expected schema.
-    """
-    if not raw_text.strip():
-        return {}
-
-    schema_description = """
-Return STRICT JSON only (no extra text, no code fences, no commentary) with keys:
-- "candidate_name": string
-- "score": integer 0–100
-- "one_line_reason": short sentence
-- "seniority": short phrase
-- "recency": short phrase
-- "top_skills": array of strings
-- "key_projects": array of strings
-- "key_gaps": array of strings
-- "match_summary": short sentence
-""".strip()
-
-    repair_prompt = f"""
-The following was your previous response when asked to evaluate a resume, but it was not valid JSON:
-
-```text
-{raw_text}
-```
-
-Rewrite this information as STRICT JSON ONLY, matching the following schema. Do not add any extra commentary, code fences, or explanations.
-
-Schema:
-{schema_description}
-""".strip()
-
-    try:
-        repair_response = client.responses.create(
-            model="gpt-5.2",
-            input=[{"role": "user", "content": [{"type": "input_text", "text": repair_prompt}]}],
-            temperature=0,
-            # response_format={"type": "json_object"},
-        )
-    except Exception:
-        return {}
-
-    repaired_text = _extract_text_from_response(repair_response)
-    repaired = _parse_json_safe(repaired_text, fallback_name)
-    return repaired
 
 def location_gate(
     client: OpenAI, file_id: str, debug_raw: bool = False, resume_filename: str = ""
