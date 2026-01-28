@@ -348,7 +348,7 @@ Schema:
 
     try:
         repair_response = client.responses.create(
-            model="gpt-5.2",
+            model="gpt-4o",
             input=[{"role": "user", "content": [{"type": "input_text", "text": repair_prompt}]}],
             temperature=0,
             # response_format={"type": "json_object"},
@@ -414,7 +414,7 @@ def evaluate_resume_with_file_id(
     try:
         response = _responses_create_json(
             client,
-            model="gpt-5.2",
+            model="gpt-4o",
             content=[
                 {"type": "input_text", "text": prompt},
                 {"type": "input_file", "file_id": file_id},
@@ -513,7 +513,7 @@ def _rerank_candidates(
     try:
         response = _responses_create_json(
             client,
-            model="gpt-5.2",
+            model="gpt-4o",
             content=[{"type": "input_text", "text": prompt}],
             temperature=0,
         )
@@ -582,7 +582,7 @@ def rank_resumes(
 
     jd_resp = _responses_create_json(
         client,
-        model="gpt-5.2",
+        model="gpt-4o",
         content=[{"type": "input_text", "text": jd_req_prompt}],
         temperature=0,
     )
