@@ -368,7 +368,7 @@ def location_gate(
     try:
         resp = _responses_create_json(
             client,
-            model="gpt-4o-mini",
+            model="gpt-5.2",
             content=[
                 {"type": "input_text", "text": prompt},
                 {"type": "input_file", "file_id": file_id},
