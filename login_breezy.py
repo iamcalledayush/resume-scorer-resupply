@@ -5,10 +5,65 @@ import time
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
 import streamlit as st
+import requests
 
 load_dotenv()
 
 DEFAULT_OUTPUT_DIR = "resume_pdfs"
+def download_resumes_from_csv_with_cookie(
+    csv_path: str,
+    output_dir: str = DEFAULT_OUTPUT_DIR,
+    cookie_header_value: str = "",
+) -> None:
+    """
+    Download Breezy resume PDFs using a manually provided Cookie header value
+    (copied from browser DevTools). No Playwright, no scraping.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    if not cookie_header_value.strip():
+        raise RuntimeError("cookie_header_value is required")
+
+    session = requests.Session()
+    session.headers.update(
+        {
+            "Cookie": cookie_header_value.strip(),
+            "User-Agent": "Mozilla/5.0",
+            "Referer": "https://app.breezy.hr/",
+            "Accept": "application/pdf,*/*",
+        }
+    )
+
+    with open(csv_path, newline="") as f:
+        reader = csv.DictReader(f)
+
+        for idx, row in enumerate(reader, start=1):
+            name = (row.get("name") or "").strip() or "candidate"
+            url = (row.get("resume") or "").strip()
+
+            if not url.startswith("http"):
+                print(f"Skipping invalid resume URL for {name}: {url}")
+                continue
+
+            safe_name = name.replace(" ", "_")
+            filename = f"{safe_name}__{idx}.pdf"
+            filepath = os.path.join(output_dir, filename)
+
+            print(f"Downloading resume for {name}...")
+            r = session.get(url, timeout=60)
+
+            if r.status_code != 200:
+                raise RuntimeError(f"Download failed for {name} ({r.status_code}): {r.text[:200]}")
+
+            if not r.content.startswith(b"%PDF"):
+                raise RuntimeError(f"Not a PDF for {name}. First bytes: {r.content[:15]}")
+
+            with open(filepath, "wb") as out:
+                out.write(r.content)
+
+            print(f"Saved: {filename}")
+            time.sleep(0.3)
+
 
 def _robust_login(page, email: str, password: str, max_attempts: int = 3):
     # Single-attempt login (ignore max_attempts)

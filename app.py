@@ -949,6 +949,11 @@ def main():
             accept_multiple_files=False,
         )
         debug_raw = st.checkbox("Show raw LLM output (debug)", value=False)
+        breezy_cookie = st.text_area(
+            "Breezy Cookie (paste full Cookie header value)",
+            height=120,
+            help="Paste from Chrome DevTools → Network → Request Headers → Cookie (the value only).",
+        )
 
     if st.button("Rank resumes"):
         if not api_key:
@@ -959,6 +964,9 @@ def main():
             return
         if not csv_file:
             st.error("Upload a candidates CSV file.")
+            return
+        if not breezy_cookie.strip():
+            st.error("Paste your Breezy Cookie (Cookie header value) to download resumes.")
             return
 
         # Normalize CSV into an internal CSV with deterministic filenames
@@ -1003,27 +1011,15 @@ def main():
                     pass
 
         client = OpenAI(api_key=api_key)
-        # --- LOGIN + DOWNLOAD ---
-        st.markdown("### Starting login")
-        with st.spinner("Logging into Breezy..."):
-            p, browser, context, page = login_breezy.login_to_breezy(headless=True)
-        st.success("Login successful")
-        
+        # --- DOWNLOAD (COOKIE AUTH, NO PLAYWRIGHT) ---
         st.markdown("### Downloading resumes")
-        with st.spinner("Downloading resumes from Breezy..."):
-            login_breezy.download_resumes_from_csv_with_page(
-                page,
-                tmp_csv_path,
+        with st.spinner("Downloading resumes from Breezy (cookie auth)..."):
+            login_breezy.download_resumes_from_csv_with_cookie(
+                csv_path=tmp_csv_path,
                 output_dir=pdf_dir,
+                cookie_header_value=breezy_cookie.strip(),
             )
         st.success("Download successful")
-        
-        # Always close Playwright resources
-        try:
-            context.close()
-            browser.close()
-        finally:
-            p.stop()
 
         # --- PREPARE FILES ---
         uploads = []
